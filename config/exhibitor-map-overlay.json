@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "type": "airventure-proportional-overlay",
+  "imageName": "AirVenture-2026-exhibitor-map-layered.svg",
+  "imageAspect": 1.7642393655371305,
+  "bounds": {
+    "north": 43.98145907666931,
+    "south": 43.973686653000044,
+    "west": -88.57354607153138,
+    "east": -88.55449074088352
+  },
+  "rotationDegrees": 90.72785640947234,
+  "opacity": 0.5
+}
