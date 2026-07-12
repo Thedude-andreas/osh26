@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, MapMouseEvent } from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
 
 type GeoFeature = {
   type: "Feature";
@@ -34,10 +33,13 @@ export default function Home() {
     catch { return {}; }
   });
   const [panelOpen, setPanelOpen] = useState(true);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
-    const map = new maplibregl.Map({
+    let map: MapLibreMap;
+    try {
+      map = new maplibregl.Map({
       container: mapContainer.current,
       center: CENTER,
       zoom: 16.2,
@@ -52,12 +54,19 @@ export default function Home() {
         },
         layers: [{ id: "osm", type: "raster", source: "osm", paint: { "raster-saturation": -0.55, "raster-contrast": -0.08, "raster-brightness-max": 0.96 } }],
       },
-    });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Kartan kunde inte startas i webbläsaren.";
+      queueMicrotask(() => setMapError(message));
+      return;
+    }
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", async () => {
+      try {
       const [stallResponse, labelResponse] = await Promise.all([fetch("/data/stalls.geojson"), fetch("/data/labels.geojson")]);
+      if (!stallResponse.ok || !labelResponse.ok) throw new Error("Kartdatan kunde inte hämtas.");
       const stallsData = await stallResponse.json() as FeatureCollection;
       const labelsData = await labelResponse.json() as FeatureCollection;
       setLabels(labelsData);
@@ -102,6 +111,11 @@ export default function Home() {
       map.on("mouseenter", "stall-fill", () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "stall-fill", () => { map.getCanvas().style.cursor = ""; });
       setReady(true);
+      requestAnimationFrame(() => map.resize());
+      setTimeout(() => map.resize(), 250);
+      } catch (error) {
+        setMapError(error instanceof Error ? error.message : "Kartlagren kunde inte laddas.");
+      }
     });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
@@ -168,6 +182,7 @@ export default function Home() {
       <section className="map-shell">
         <div ref={mapContainer} className="map-canvas" />
         {!ready && <div className="loading-card"><span /><strong>Laddar 1 219 montrar…</strong></div>}
+        {mapError && <div className="map-error"><strong>Kartan kunde inte visas</strong><span>{mapError}</span><button onClick={() => location.reload()}>Försök igen</button></div>}
         <div className="layer-card">
           <strong>Lager</strong>
           <label><input type="checkbox" checked={stallsVisible} onChange={(event) => setStallsVisible(event.target.checked)} /> Monterpolygoner</label>
