@@ -1,0 +1,10 @@
+{
+  "officialExhibitors": 1015,
+  "officialBoothRelations": 1394,
+  "officialBoothNumbers": 1209,
+  "mapBoothLabelCandidates": 671,
+  "linkedStallPolygons": 650,
+  "autoMatchesWithin15m": 630,
+  "reviewMatches15To25m": 20,
+  "unlinkedStallPolygons": 569
+}
