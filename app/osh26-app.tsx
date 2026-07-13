@@ -123,7 +123,25 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       });
       map.addLayer({ id: "stall-line", type: "line", source: "stalls", paint: { "line-color": "#72551e", "line-width": ["interpolate", ["linear"], ["zoom"], 15, 0.45, 20, 1.2] } });
 
-      markersRef.current = labelData.features.map((feature) => {
+      const stallsById = new Map(stalls.features.map((stall) => [String(stall.id), stall]));
+      const markerMeta = labelData.features.map((feature) => {
+        const stall = stallsById.get(String(feature.properties.stallId));
+        const ring = stall?.geometry.type === "Polygon"
+          ? (stall.geometry.coordinates as [number, number][][])[0]
+          : [feature.geometry.coordinates as [number, number]];
+        const bounds = ring.reduce((result, coordinate) => ({
+          minX: Math.min(result.minX, coordinate[0]),
+          maxX: Math.max(result.maxX, coordinate[0]),
+          minY: Math.min(result.minY, coordinate[1]),
+          maxY: Math.max(result.maxY, coordinate[1]),
+        }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+        const center: [number, number] = Number.isFinite(bounds.minX)
+          ? [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2]
+          : feature.geometry.coordinates as [number, number];
+        return { feature, ring, center };
+      });
+
+      markersRef.current = markerMeta.map(({ feature, center }) => {
         const element = document.createElement("button");
         element.className = "booth-label";
         const name = String(feature.properties.displayName || "");
@@ -136,19 +154,24 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           const match = exhibitorData.exhibitors.find((item) => ids.includes(item.id));
           if (match) setSelected(match);
         });
-        return new maplibregl.Marker({ element }).setLngLat(feature.geometry.coordinates as [number, number]).addTo(map);
+        return new maplibregl.Marker({ element, anchor: "center" }).setLngLat(center).addTo(map);
       });
       const updateLabels = () => {
         const zoom = map.getZoom();
-        labelData.features.forEach((feature, index) => {
+        markerMeta.forEach(({ feature, ring }, index) => {
           const element = markersRef.current[index]?.getElement();
           if (!element) return;
-          const full = zoom >= 19.6;
+          const projected = ring.map((coordinate) => map.project(coordinate));
+          const pixelArea = projected.length > 1
+            ? (Math.max(...projected.map((point) => point.x)) - Math.min(...projected.map((point) => point.x)))
+              * (Math.max(...projected.map((point) => point.y)) - Math.min(...projected.map((point) => point.y)))
+            : 0;
+          const full = zoom >= 18.5 || pixelArea >= 1800;
           element.classList.toggle("full-label", full);
           element.textContent = full
             ? `${String(feature.properties.displayName || feature.properties.boothNumber)} · ${String(feature.properties.boothNumber || "")}`
             : String(feature.properties.boothNumber || "");
-          element.hidden = zoom < 16.1;
+          element.hidden = zoom < 15.6 || (!full && pixelArea < 70);
         });
       };
       map.on("zoomend", updateLabels);

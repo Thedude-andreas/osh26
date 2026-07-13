@@ -53,7 +53,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .map-loading { position:absolute; z-index:3; left:50%; top:50%; display:flex; align-items:center; gap:10px; transform:translate(-50%,-50%); padding:13px 17px; border-radius:12px; background:white; box-shadow:0 8px 30px rgba(0,0,0,.16); font-size:11px; }
 .map-loading span { width:13px; height:13px; border:2px solid #cbdad5; border-top-color:var(--teal); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.booth-label { max-width:138px; padding:2px 5px; border:1px solid rgba(104,72,19,.3); border-radius:999px; background:rgba(255,250,231,.76); color:#744821; box-shadow:0 1px 3px rgba(0,0,0,.12); cursor:pointer; font-size:9px; font-weight:900; line-height:1.05; white-space:nowrap; }
+.booth-label { max-width:138px; padding:2px 5px; border:1px solid rgba(104,72,19,.3); border-radius:999px; background:rgba(255,250,231,.76); color:#744821; box-shadow:0 1px 3px rgba(0,0,0,.12); cursor:pointer; font-size:9px; font-weight:900; line-height:1.05; text-align:center; white-space:nowrap; }
 .booth-label.full-label { padding:4px 6px; border-color:rgba(20,85,81,.3); border-radius:5px; background:rgba(255,255,255,.78); color:#103839; white-space:normal; }
 .booth-label[hidden] { display:none; }
 .locate { position:absolute; right:18px; bottom:22px; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--line); border-radius:13px; background:white; color:var(--teal); box-shadow:0 6px 20px rgba(17,48,48,.17); cursor:pointer; }
