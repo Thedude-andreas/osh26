@@ -42,6 +42,15 @@ function minutesFromTime(value: string) {
   return hours * 60 + minutes;
 }
 
+function seriesKey(event: ScheduleEvent) {
+  return `${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`;
+}
+
+function formatShortDate(value: string) {
+  const [, month, day] = value.split("-");
+  return `${day}/${month}`;
+}
+
 function buildTimeline(events: ScheduleEvent[]) {
   const entries = events.map((event) => {
     const start = minutesFromTime(event.localStart);
@@ -91,7 +100,7 @@ function stringArray(value: unknown): string[] {
   catch { return [value]; }
 }
 
-function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" }) {
+function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" | "trash" }) {
   const paths = {
     map: <><path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2Z"/><path d="M8 4v13M16 7v13"/></>,
     plan: <><path d="M9 5h11M9 12h11M9 19h11"/><path d="m3 5 1 1 2-2M3 12l1 1 2-2M3 19l1 1 2-2"/></>,
@@ -102,6 +111,7 @@ function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" 
     close: <path d="m6 6 12 12M18 6 6 18"/>,
     check: <path d="m5 12 4 4L19 6"/>,
     repeat: <><path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></>,
+    trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6"/><path d="M10 11v6M14 11v6"/></>,
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -124,6 +134,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [eventCategory, setEventCategory] = useState("");
   const [eventVenue, setEventVenue] = useState("");
   const [seriesExpanded, setSeriesExpanded] = useState(false);
+  const [expandedSeriesKey, setExpandedSeriesKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [crew, setCrew] = useState<Crew | null>(null);
@@ -180,6 +191,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   }, [events, exhibitors, query]);
   const visibleResults = searchMatches.slice(0, 50);
   const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
+  const plannedItemByReference = useMemo(() => new Map(plan.map((item) => [item.referenceId, item])), [plan]);
   const crewPlan = useMemo(() => plan.filter((item) => item.kind === "exhibitor"), [plan]);
   const crewCalendarItems = useMemo(() => plan.filter((item) => item.kind === "event"), [plan]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
@@ -188,7 +200,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const eventSeries = useMemo(() => {
     const groups = new Map<string, ScheduleEvent[]>();
     events.forEach((event) => {
-      const key = `${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`;
+      const key = seriesKey(event);
       groups.set(key, [...(groups.get(key) || []), event]);
     });
     groups.forEach((instances) => instances.sort((a, b) => a.start.localeCompare(b.start)));
@@ -198,7 +210,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const crewEventsForDate = useMemo(() => crewCalendarItems.map((item) => eventById.get(item.referenceId)).filter((event): event is ScheduleEvent => Boolean(event && event.localDate === selectedDate && (!eventCategory || event.category === eventCategory) && (!eventVenue || event.venue === eventVenue))).sort((a, b) => a.start.localeCompare(b.start)), [crewCalendarItems, eventById, eventCategory, eventVenue, selectedDate]);
   const selectedSeries = useMemo(() => {
     if (!selectedEvent) return [];
-    return eventSeries.get(`${selectedEvent.title.trim().toLocaleLowerCase()}\u0000${selectedEvent.category}\u0000${selectedEvent.venue}`) || [selectedEvent];
+    return eventSeries.get(seriesKey(selectedEvent)) || [selectedEvent];
   }, [eventSeries, selectedEvent]);
   const timeline = useMemo(() => buildTimeline(crewEventsForDate), [crewEventsForDate]);
 
@@ -436,6 +448,19 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       .finally(() => setSaving(false));
   }
 
+  async function removeCrewItem(item: PlanItem) {
+    if (!crew || saving) return;
+    setSaving(true);
+    setPlan((current) => current.filter((entry) => entry.id !== item.id));
+    try {
+      const response = await fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", crewId: crew.id, itemId: item.id }) });
+      if (!response.ok) throw new Error("Could not remove this item");
+    } catch (error) {
+      setPlan((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
+      setCrewError(error instanceof Error ? error.message : "Could not update your Crew");
+    } finally { setSaving(false); }
+  }
+
   async function createCrew() {
     const name = draftCrewName.trim();
     if (!name) return;
@@ -501,7 +526,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, events or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
             {visibleResults.length > 0 && <div className="search-menu"><div className="search-scroll">{visibleResults.map((match) => match.kind === "exhibitor"
               ? <button key={`exhibitor-${match.item.id}`} onClick={() => selectExhibitor(match.item)}><span><strong>{match.item.name}</strong><small>{match.item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{match.item.booths.join(", ")}</b></button>
-              : <button key={`event-${match.item.id}`} onClick={() => selectScheduleEvent(match.item)}><span><strong>{match.item.title}</strong><small>{match.item.category} · {match.item.venue}</small></span><b className="event-result-time">{match.item.localDate.slice(5).replace("-", "/")} · {match.item.localStart}</b></button>)}</div><div className="search-count">{searchMatches.length > visibleResults.length ? `Showing ${visibleResults.length} of ${searchMatches.length} results` : `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`}</div></div>}
+              : <button key={`event-${match.item.id}`} onClick={() => selectScheduleEvent(match.item)}><span><strong>{match.item.title}</strong><small>{match.item.category} · {match.item.venue}</small></span><b className="event-result-time">{formatShortDate(match.item.localDate)} · {match.item.localStart}</b></button>)}</div><div className="search-count">{searchMatches.length > visibleResults.length ? `Showing ${visibleResults.length} of ${searchMatches.length} results` : `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`}</div></div>}
           </div>
           <div className="status-pill"><i /> Offline ready</div>
         </header>
@@ -526,7 +551,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Exhibitors and booths your Crew wants to visit.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add exhibitors</button></div>
           {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
           : crewPlan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors your Crew wants to visit." action="Explore the map" onAction={() => setView("map")} />
-          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p></div><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span></article>)}</div>}
+          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span><button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
@@ -541,20 +566,20 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             <div className="place-kicker">{selectedEvent.category} · {selectedEvent.localStart}–{selectedEvent.localEnd}</div>
             <h2>{selectedEvent.title}</h2>
             <p className="event-venue">{selectedEvent.venue}</p>
-            {selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
+            {calendarMode === "crew" && selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
-            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a><button disabled={saving} className={plannedIds.has(selectedEvent.id) ? "primary added" : "primary"} onClick={() => addEventToCalendar(selectedEvent)}>{plannedIds.has(selectedEvent.id) ? <><Icon name="check"/> Added to Crew Calendar</> : "+ Add to Crew Calendar"}</button></div>
-            {seriesExpanded && selectedSeries.length > 1 && <div className="series-instances"><div><strong>All instances</strong><small>Select a date and time to view or add that specific instance.</small></div>{selectedSeries.map((instance) => <button key={instance.id} className={instance.id === selectedEvent.id ? "active" : ""} onClick={() => { setSelectedEvent(instance); setSelectedDate(instance.localDate); }}><span><strong>{instance.localDate.slice(5).replace("-", "/")}</strong><small>{instance.localStart}–{instance.localEnd}</small></span><em>{instance.venue}</em><b>{plannedIds.has(instance.id) ? "✓ Added" : "View"}</b></button>)}</div>}
+            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
+            {calendarMode === "crew" && seriesExpanded && selectedSeries.length > 1 && <div className="series-instances"><div><strong>All instances</strong><small>Select a date and time to view or add that specific instance.</small></div>{selectedSeries.map((instance) => <button key={instance.id} className={instance.id === selectedEvent.id ? "active" : ""} onClick={() => { setSelectedEvent(instance); setSelectedDate(instance.localDate); }}><span><strong>{formatShortDate(instance.localDate)}</strong><small>{instance.localStart}–{instance.localEnd}</small></span><em>{instance.venue}</em><b>{plannedIds.has(instance.id) ? "✓ Added" : "View"}</b></button>)}</div>}
           </article>}
 
           {calendarMode === "crew" ? <section className="calendar-section crew-schedule">
             <div className="calendar-section-head"><div><small>SHARED CREW CALENDAR</small><h2>{fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</h2></div><b>{crewEventsForDate.length}</b></div>
             {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No matching Crew events on this day</strong><small>Open All Events to add scheduled activities.</small></span><button onClick={() => setCalendarMode("all")}>Browse events</button></div>
-              : <div className="calendar-time-grid" style={{ height: timeline.height }}>{timeline.hours.map((minute) => <div className="time-rule" key={minute} style={{ top: (minute - timeline.startMinute) * 0.9 }}><time>{String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00</time><span/></div>)}{timeline.placements.map(({ event, start, end, column, columns }) => <article key={event.id} className="timeline-event" style={{ top: (start - timeline.startMinute) * 0.9, height: Math.max(34, (end - start) * 0.9), left: `calc(65px + (100% - 72px) * ${column} / ${columns})`, width: `calc((100% - 72px) / ${columns} - 5px)` }} onClick={() => openEventDetails(event)}><span><time>{event.localStart}–{event.localEnd}</time><strong>{event.title}</strong><small>{event.venue}</small></span>{(eventSeries.get(`${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`)?.length || 0) > 1 && <button className="repeat-button" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }} aria-label="View all instances"><Icon name="repeat"/></button>}</article>)}</div>}
+              : <div className="calendar-time-grid" style={{ height: timeline.height }}>{timeline.hours.map((minute) => <div className="time-rule" key={minute} style={{ top: (minute - timeline.startMinute) * 0.9 }}><time>{String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00</time><span/></div>)}{timeline.placements.map(({ event, start, end, column, columns }) => <article key={event.id} className="timeline-event" style={{ top: (start - timeline.startMinute) * 0.9, height: Math.max(34, (end - start) * 0.9), left: `calc(65px + (100% - 72px) * ${column} / ${columns})`, width: `calc((100% - 72px) / ${columns} - 5px)` }} onClick={() => openEventDetails(event)}><span><time>{event.localStart}–{event.localEnd}</time><strong>{event.title}</strong><small>{event.venue}</small></span><div className="timeline-actions">{(eventSeries.get(seriesKey(event))?.length || 0) > 1 && <button className="repeat-button" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }} aria-label="View all instances"><Icon name="repeat"/></button>}<button className="repeat-button remove" onClick={(click) => { click.stopPropagation(); removeCrewItem(plannedItemByReference.get(event.id)!); }} aria-label="Remove from Crew Calendar"><Icon name="trash"/></button></div></article>)}</div>}
           </section> : <section className="calendar-section official-schedule">
             <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>All scheduled events</h2></div><b>{scheduleForDate.length}</b></div>
             <p className="schedule-count">Chronological schedule for {fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</p>
-            <div className="schedule-list">{scheduleForDate.map((event) => { const seriesCount = eventSeries.get(`${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`)?.length || 1; return <article key={event.id} className="schedule-event" onClick={() => openEventDetails(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small>{seriesCount > 1 && <button className="recurrence-inline" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }}><Icon name="repeat"/>{seriesCount} instances</button>}</span><button className={plannedIds.has(event.id) ? "event-add planned" : "event-add"} onClick={(click) => { click.stopPropagation(); addEventToCalendar(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</button></article>; })}</div>
+            <div className="schedule-list">{scheduleForDate.map((event) => { const key = seriesKey(event); const instances = eventSeries.get(key) || [event]; const expanded = expandedSeriesKey === key; return <div className="schedule-event-group" key={event.id}><article className="schedule-event" onClick={() => openEventDetails(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small>{instances.length > 1 && <button className="recurrence-inline" onClick={(click) => { click.stopPropagation(); setExpandedSeriesKey(expanded ? null : key); }}><Icon name="repeat"/>{instances.length} instances · {expanded ? "Hide" : "View all"}</button>}</span><button className={plannedIds.has(event.id) ? "event-add planned" : "event-add"} onClick={(click) => { click.stopPropagation(); const planned = plannedItemByReference.get(event.id); if (planned) removeCrewItem(planned); else addEventToCalendar(event); }}>{plannedIds.has(event.id) ? "Remove" : "+ Add"}</button></article>{expanded && <div className="inline-series-list"><div><strong>All instances</strong><small>Dates use day/month format.</small></div>{instances.map((instance) => { const planned = plannedItemByReference.get(instance.id); return <div key={instance.id} className={instance.id === event.id ? "current" : ""}><time><strong>{formatShortDate(instance.localDate)}</strong><small>{instance.localStart}–{instance.localEnd}</small></time><span>{instance.venue}</span><button className={planned ? "planned" : ""} onClick={() => planned ? removeCrewItem(planned) : addEventToCalendar(instance)}>{planned ? "Remove" : "+ Add"}</button></div>; })}</div>}</div>; })}</div>
           </section>}
         </div>
       </section>

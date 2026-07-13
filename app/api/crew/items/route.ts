@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const payload = await request.json() as {
-    action?: "add" | "toggleVisited";
+    action?: "add" | "toggleVisited" | "remove";
     crewId?: string;
     itemId?: string;
     kind?: "exhibitor" | "event";
@@ -38,6 +38,10 @@ export async function POST(request: Request) {
       .where(and(eq(crewItems.id, payload.itemId), eq(crewItems.crewId, payload.crewId)));
     const [item] = await db.select().from(crewItems).where(eq(crewItems.id, payload.itemId)).limit(1);
     return Response.json({ item });
+  }
+  if (payload.action === "remove" && payload.itemId) {
+    await db.delete(crewItems).where(and(eq(crewItems.id, payload.itemId), eq(crewItems.crewId, payload.crewId)));
+    return Response.json({ removed: true });
   }
   return Response.json({ error: "Unknown action" }, { status: 400 });
 }
