@@ -35,6 +35,55 @@ const CALENDAR_DATES = [
   { value: "2026-07-26", day: "SUN", date: "26" },
 ];
 
+type TimelinePlacement = { event: ScheduleEvent; start: number; end: number; column: number; columns: number };
+
+function minutesFromTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function buildTimeline(events: ScheduleEvent[]) {
+  const entries = events.map((event) => {
+    const start = minutesFromTime(event.localStart);
+    let end = minutesFromTime(event.localEnd);
+    if (end <= start) end += 24 * 60;
+    return { event, start, end };
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  const earliest = entries.length ? Math.min(...entries.map((entry) => entry.start)) : 7 * 60;
+  const latest = entries.length ? Math.max(...entries.map((entry) => entry.end)) : 22 * 60;
+  const startMinute = Math.min(7 * 60, Math.floor(earliest / 60) * 60);
+  const endMinute = Math.max(22 * 60, Math.ceil(latest / 60) * 60);
+  const placements: TimelinePlacement[] = [];
+  let group: typeof entries = [];
+  let groupEnd = -1;
+  const flush = () => {
+    if (!group.length) return;
+    const columnEnds: number[] = [];
+    const assigned = group.map((entry) => {
+      let column = columnEnds.findIndex((end) => end <= entry.start);
+      if (column < 0) { column = columnEnds.length; columnEnds.push(entry.end); }
+      else columnEnds[column] = entry.end;
+      return { ...entry, column };
+    });
+    assigned.forEach((entry) => placements.push({ ...entry, columns: columnEnds.length }));
+    group = [];
+    groupEnd = -1;
+  };
+  entries.forEach((entry) => {
+    if (group.length && entry.start >= groupEnd) flush();
+    group.push(entry);
+    groupEnd = Math.max(groupEnd, entry.end);
+  });
+  flush();
+  return {
+    placements,
+    startMinute,
+    endMinute,
+    hours: Array.from({ length: (endMinute - startMinute) / 60 + 1 }, (_, index) => startMinute + index * 60),
+    height: (endMinute - startMinute) * 0.9,
+  };
+}
+
 function stringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value !== "string") return [];
@@ -42,7 +91,7 @@ function stringArray(value: unknown): string[] {
   catch { return [value]; }
 }
 
-function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" }) {
+function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" }) {
   const paths = {
     map: <><path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2Z"/><path d="M8 4v13M16 7v13"/></>,
     plan: <><path d="M9 5h11M9 12h11M9 19h11"/><path d="m3 5 1 1 2-2M3 12l1 1 2-2M3 19l1 1 2-2"/></>,
@@ -52,6 +101,7 @@ function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" 
     location: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></>,
     close: <path d="m6 6 12 12M18 6 6 18"/>,
     check: <path d="m5 12 4 4L19 6"/>,
+    repeat: <><path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></>,
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -73,6 +123,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [calendarMode, setCalendarMode] = useState<"crew" | "all">("crew");
   const [eventCategory, setEventCategory] = useState("");
   const [eventVenue, setEventVenue] = useState("");
+  const [seriesExpanded, setSeriesExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [crew, setCrew] = useState<Crew | null>(null);
@@ -134,8 +185,22 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const eventCategories = useMemo(() => Array.from(new Set(events.map((event) => event.category))).sort(), [events]);
   const eventVenues = useMemo(() => Array.from(new Set(events.map((event) => event.venue).filter(Boolean))).sort(), [events]);
+  const eventSeries = useMemo(() => {
+    const groups = new Map<string, ScheduleEvent[]>();
+    events.forEach((event) => {
+      const key = `${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`;
+      groups.set(key, [...(groups.get(key) || []), event]);
+    });
+    groups.forEach((instances) => instances.sort((a, b) => a.start.localeCompare(b.start)));
+    return groups;
+  }, [events]);
   const scheduleForDate = useMemo(() => events.filter((event) => event.localDate === selectedDate && (!eventCategory || event.category === eventCategory) && (!eventVenue || event.venue === eventVenue)), [eventCategory, eventVenue, events, selectedDate]);
   const crewEventsForDate = useMemo(() => crewCalendarItems.map((item) => eventById.get(item.referenceId)).filter((event): event is ScheduleEvent => Boolean(event && event.localDate === selectedDate && (!eventCategory || event.category === eventCategory) && (!eventVenue || event.venue === eventVenue))).sort((a, b) => a.start.localeCompare(b.start)), [crewCalendarItems, eventById, eventCategory, eventVenue, selectedDate]);
+  const selectedSeries = useMemo(() => {
+    if (!selectedEvent) return [];
+    return eventSeries.get(`${selectedEvent.title.trim().toLocaleLowerCase()}\u0000${selectedEvent.category}\u0000${selectedEvent.venue}`) || [selectedEvent];
+  }, [eventSeries, selectedEvent]);
+  const timeline = useMemo(() => buildTimeline(crewEventsForDate), [crewEventsForDate]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -319,9 +384,15 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     clearHighlight();
     setSelected(null);
     setSelectedEvent(item);
+    setSeriesExpanded(false);
     setSelectedDate(item.localDate);
     setCalendarMode("all");
     setView("calendar");
+  }
+
+  function openEventDetails(item: ScheduleEvent, showSeries = false) {
+    setSelectedEvent(item);
+    setSeriesExpanded(showSeries);
   }
 
   useEffect(() => { highlightExhibitorRef.current = highlightExhibitor; });
@@ -470,18 +541,20 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             <div className="place-kicker">{selectedEvent.category} · {selectedEvent.localStart}–{selectedEvent.localEnd}</div>
             <h2>{selectedEvent.title}</h2>
             <p className="event-venue">{selectedEvent.venue}</p>
+            {selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
             <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a><button disabled={saving} className={plannedIds.has(selectedEvent.id) ? "primary added" : "primary"} onClick={() => addEventToCalendar(selectedEvent)}>{plannedIds.has(selectedEvent.id) ? <><Icon name="check"/> Added to Crew Calendar</> : "+ Add to Crew Calendar"}</button></div>
+            {seriesExpanded && selectedSeries.length > 1 && <div className="series-instances"><div><strong>All instances</strong><small>Select a date and time to view or add that specific instance.</small></div>{selectedSeries.map((instance) => <button key={instance.id} className={instance.id === selectedEvent.id ? "active" : ""} onClick={() => { setSelectedEvent(instance); setSelectedDate(instance.localDate); }}><span><strong>{instance.localDate.slice(5).replace("-", "/")}</strong><small>{instance.localStart}–{instance.localEnd}</small></span><em>{instance.venue}</em><b>{plannedIds.has(instance.id) ? "✓ Added" : "View"}</b></button>)}</div>}
           </article>}
 
           {calendarMode === "crew" ? <section className="calendar-section crew-schedule">
             <div className="calendar-section-head"><div><small>SHARED CREW CALENDAR</small><h2>{fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</h2></div><b>{crewEventsForDate.length}</b></div>
             {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No matching Crew events on this day</strong><small>Open All Events to add scheduled activities.</small></span><button onClick={() => setCalendarMode("all")}>Browse events</button></div>
-              : <div className="schedule-list crew-event-list calendar-timeline">{crewEventsForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category}</small><em>{event.venue}</em></span><b>In Crew Calendar</b></button>)}</div>}
+              : <div className="calendar-time-grid" style={{ height: timeline.height }}>{timeline.hours.map((minute) => <div className="time-rule" key={minute} style={{ top: (minute - timeline.startMinute) * 0.9 }}><time>{String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00</time><span/></div>)}{timeline.placements.map(({ event, start, end, column, columns }) => <article key={event.id} className="timeline-event" style={{ top: (start - timeline.startMinute) * 0.9, height: Math.max(34, (end - start) * 0.9), left: `calc(65px + (100% - 72px) * ${column} / ${columns})`, width: `calc((100% - 72px) / ${columns} - 5px)` }} onClick={() => openEventDetails(event)}><span><time>{event.localStart}–{event.localEnd}</time><strong>{event.title}</strong><small>{event.venue}</small></span>{(eventSeries.get(`${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`)?.length || 0) > 1 && <button className="repeat-button" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }} aria-label="View all instances"><Icon name="repeat"/></button>}</article>)}</div>}
           </section> : <section className="calendar-section official-schedule">
             <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>All scheduled events</h2></div><b>{scheduleForDate.length}</b></div>
             <p className="schedule-count">Chronological schedule for {fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</p>
-            <div className="schedule-list">{scheduleForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b className={plannedIds.has(event.id) ? "planned" : ""} onClick={(click) => { click.stopPropagation(); addEventToCalendar(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</b></button>)}</div>
+            <div className="schedule-list">{scheduleForDate.map((event) => { const seriesCount = eventSeries.get(`${event.title.trim().toLocaleLowerCase()}\u0000${event.category}\u0000${event.venue}`)?.length || 1; return <article key={event.id} className="schedule-event" onClick={() => openEventDetails(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small>{seriesCount > 1 && <button className="recurrence-inline" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }}><Icon name="repeat"/>{seriesCount} instances</button>}</span><button className={plannedIds.has(event.id) ? "event-add planned" : "event-add"} onClick={(click) => { click.stopPropagation(); addEventToCalendar(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</button></article>; })}</div>
           </section>}
         </div>
       </section>
