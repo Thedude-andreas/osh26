@@ -23,8 +23,17 @@ type Collection = { type: "FeatureCollection"; features: Feature[] };
 type Crew = { id: string; name: string; inviteCode: string; role: "owner" | "member" };
 type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null };
 type BoothLocation = { stallId: string; booth: string; center: [number, number]; bounds: [[number, number], [number, number]]; markerIndex: number };
+type ScheduleEvent = { id: string; title: string; category: string; interests: string[]; venue: string; start: string; end: string; localDate: string; localStart: string; localEnd: string; timezone: string; url: string };
+type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kind: "event"; item: ScheduleEvent; score: number };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
+const CALENDAR_DATES = [
+  { value: "2026-07-18", day: "SAT", date: "18" }, { value: "2026-07-19", day: "SUN", date: "19" },
+  { value: "2026-07-20", day: "MON", date: "20" }, { value: "2026-07-21", day: "TUE", date: "21" },
+  { value: "2026-07-22", day: "WED", date: "22" }, { value: "2026-07-23", day: "THU", date: "23" },
+  { value: "2026-07-24", day: "FRI", date: "24" }, { value: "2026-07-25", day: "SAT", date: "25" },
+  { value: "2026-07-26", day: "SUN", date: "26" },
+];
 
 function stringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
@@ -57,7 +66,11 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const highlightExhibitorRef = useRef<(item: Exhibitor, focusBooth?: string) => void>(() => undefined);
   const [view, setView] = useState<View>("map");
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
+  const [events, setEvents] = useState<ScheduleEvent[]>([]);
   const [selected, setSelected] = useState<Exhibitor | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
+  const [selectedDate, setSelectedDate] = useState("2026-07-20");
+  const [eventCategory, setEventCategory] = useState("");
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [crew, setCrew] = useState<Crew | null>(null);
@@ -69,11 +82,11 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [crewError, setCrewError] = useState("");
   const [qrCode, setQrCode] = useState("");
 
-  const searchMatches = useMemo(() => {
+  const searchMatches = useMemo<SearchMatch[]>(() => {
     const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const value = normalize(query.trim());
     if (!value) return [];
-    return exhibitors.map((item) => {
+    const exhibitorMatches: SearchMatch[] = exhibitors.map((item) => {
       const name = normalize(item.name);
       const booths = item.booths.map(normalize);
       const tags = item.tags.map(normalize);
@@ -88,11 +101,36 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       else if (tags.some((tag) => tag === value)) score = 500;
       else if (tags.some((tag) => tag.startsWith(value))) score = 400;
       else if (tags.some((tag) => tag.includes(value))) score = 300;
-      return { item, score };
-    }).filter((match) => match.score > 0).sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name)).map((match) => match.item);
-  }, [exhibitors, query]);
+      return { kind: "exhibitor" as const, item, score };
+    }).filter((match) => match.score > 0);
+    const eventMatches: SearchMatch[] = events.map((item) => {
+      const title = normalize(item.title);
+      const venue = normalize(item.venue);
+      const category = normalize(item.category);
+      const interests = item.interests.map(normalize);
+      const titleWords = title.split(/[^a-z0-9]+/);
+      let score = 0;
+      if (title === value) score = 1000;
+      else if (title.startsWith(value)) score = 920;
+      else if (titleWords.some((word) => word.startsWith(value))) score = 870;
+      else if (title.includes(value)) score = 800;
+      else if (venue.includes(value)) score = 650;
+      else if (category.startsWith(value)) score = 500;
+      else if (interests.some((interest) => interest.includes(value))) score = 450;
+      return { kind: "event" as const, item, score };
+    }).filter((match) => match.score > 0);
+    return [...exhibitorMatches, ...eventMatches].sort((a, b) => {
+      const aLabel = a.kind === "event" ? a.item.title : a.item.name;
+      const bLabel = b.kind === "event" ? b.item.title : b.item.name;
+      return b.score - a.score || aLabel.localeCompare(bLabel);
+    });
+  }, [events, exhibitors, query]);
   const visibleResults = searchMatches.slice(0, 50);
   const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
+  const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
+  const eventCategories = useMemo(() => Array.from(new Set(events.map((event) => event.category))).sort(), [events]);
+  const scheduleForDate = useMemo(() => events.filter((event) => event.localDate === selectedDate && (!eventCategory || event.category === eventCategory)), [eventCategory, events, selectedDate]);
+  const crewEventsForDate = useMemo(() => plan.filter((item) => item.kind === "event").map((item) => eventById.get(item.referenceId)).filter((event): event is ScheduleEvent => Boolean(event && event.localDate === selectedDate)).sort((a, b) => a.start.localeCompare(b.start)), [eventById, plan, selectedDate]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -101,6 +139,10 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       return response.json() as Promise<{ crew: Crew | null; items: PlanItem[] }>;
     }).then((data) => { setCrew(data.crew); setPlan(data.items); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
   }, [signedIn]);
+
+  useEffect(() => {
+    fetch("/data/events.json").then((response) => response.json()).then((data: { events: ScheduleEvent[] }) => setEvents(data.events)).catch(() => setEvents([]));
+  }, []);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("join");
@@ -267,6 +309,15 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     setView("map");
   }
 
+  function selectScheduleEvent(item: ScheduleEvent) {
+    setQuery("");
+    clearHighlight();
+    setSelected(null);
+    setSelectedEvent(item);
+    setSelectedDate(item.localDate);
+    setView("calendar");
+  }
+
   useEffect(() => { highlightExhibitorRef.current = highlightExhibitor; });
 
   function closeSelection() {
@@ -282,6 +333,29 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       .then(async (response) => { if (!response.ok) throw new Error("Could not add this exhibitor"); return response.json() as Promise<{ item: PlanItem }>; })
       .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
       .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Plan"))
+      .finally(() => setSaving(false));
+  }
+
+  function addEventToPlan(item: ScheduleEvent) {
+    if (!crew) { setCrewModal("create"); return; }
+    if (plannedIds.has(item.id)) return;
+    setSaving(true);
+    fetch("/api/crew/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add",
+        crewId: crew.id,
+        kind: "event",
+        referenceId: item.id,
+        title: item.title,
+        meta: `${item.localStart}–${item.localEnd} · ${item.venue}`,
+        startsAt: item.start,
+      }),
+    })
+      .then(async (response) => { if (!response.ok) throw new Error("Could not add this event"); return response.json() as Promise<{ item: PlanItem }>; })
+      .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
+      .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Calendar"))
       .finally(() => setSaving(false));
   }
 
@@ -332,6 +406,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   }
 
   const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  const activeDate = CALENDAR_DATES.find((date) => date.value === selectedDate) || CALENDAR_DATES[2];
+  const fullDay = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${selectedDate}T12:00:00Z`)).toUpperCase();
 
   return (
     <main className="app-shell">
@@ -345,8 +421,10 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         <header className="topbar">
           <div className="mobile-brand"><div className="logo">26</div><strong>OSH26</strong></div>
           <button className="crew-switcher" onClick={() => setCrewModal(crew ? "manage" : "create")}><Icon name="crew"/><span><small>YOUR CREW</small><strong>{crew?.name || "Create or join a Crew"}</strong></span><em>⌄</em></button>
-          <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, booths or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
-            {visibleResults.length > 0 && <div className="search-menu"><div className="search-scroll">{visibleResults.map((item) => <button key={item.id} onClick={() => selectExhibitor(item)}><span><strong>{item.name}</strong><small>{item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{item.booths.join(", ")}</b></button>)}</div><div className="search-count">{searchMatches.length > visibleResults.length ? `Showing ${visibleResults.length} of ${searchMatches.length} results` : `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`}</div></div>}
+          <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, events or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
+            {visibleResults.length > 0 && <div className="search-menu"><div className="search-scroll">{visibleResults.map((match) => match.kind === "exhibitor"
+              ? <button key={`exhibitor-${match.item.id}`} onClick={() => selectExhibitor(match.item)}><span><strong>{match.item.name}</strong><small>{match.item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{match.item.booths.join(", ")}</b></button>
+              : <button key={`event-${match.item.id}`} onClick={() => selectScheduleEvent(match.item)}><span><strong>{match.item.title}</strong><small>{match.item.category} · {match.item.venue}</small></span><b className="event-result-time">{match.item.localDate.slice(5).replace("-", "/")} · {match.item.localStart}</b></button>)}</div><div className="search-count">{searchMatches.length > visibleResults.length ? `Showing ${visibleResults.length} of ${searchMatches.length} results` : `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`}</div></div>}
           </div>
           <div className="status-pill"><i /> Offline ready</div>
         </header>
@@ -375,9 +453,29 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
-          <div className="content-header"><div><span>MONDAY · JULY 20</span><h1>Crew Calendar</h1><p>Scheduled events selected by your Crew appear here automatically.</p></div><button className="date-button">Today⌄</button></div>
-          <div className="calendar-strip">{["MON 20", "TUE 21", "WED 22", "THU 23", "FRI 24", "SAT 25", "SUN 26"].map((date, index) => <button key={date} className={index === 0 ? "active" : ""}><small>{date.split(" ")[0]}</small><strong>{date.split(" ")[1]}</strong></button>)}</div>
-          <Empty icon="calendar" title="No scheduled events yet" text="Add seminars, workshops or air shows and they will be placed on the shared Crew Calendar." action="Find events" onAction={() => setView("map")} />
+          <div className="content-header"><div><span>{fullDay} · JULY {activeDate.date}</span><h1>Crew Calendar</h1><p>Choose from the official AirVenture schedule and plan together.</p></div><button className="date-button" onClick={() => { setSelectedDate("2026-07-20"); setSelectedEvent(null); }}>Opening day</button></div>
+          <div className="calendar-strip">{CALENDAR_DATES.map((date) => <button key={date.value} className={date.value === selectedDate ? "active" : ""} onClick={() => { setSelectedDate(date.value); setSelectedEvent(null); }}><small>{date.day}</small><strong>{date.date}</strong></button>)}</div>
+
+          {selectedEvent && <article className="event-detail">
+            <button className="close-card" onClick={() => setSelectedEvent(null)} aria-label="Close"><Icon name="close"/></button>
+            <div className="place-kicker">{selectedEvent.category} · {selectedEvent.localStart}–{selectedEvent.localEnd}</div>
+            <h2>{selectedEvent.title}</h2>
+            <p className="event-venue">{selectedEvent.venue}</p>
+            <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
+            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a><button disabled={saving} className={plannedIds.has(selectedEvent.id) ? "primary added" : "primary"} onClick={() => addEventToPlan(selectedEvent)}>{plannedIds.has(selectedEvent.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button></div>
+          </article>}
+
+          <section className="calendar-section crew-schedule">
+            <div className="calendar-section-head"><div><small>SHARED PLAN</small><h2>Your Crew&apos;s day</h2></div><b>{crewEventsForDate.length}</b></div>
+            {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No Crew events on this day</strong><small>Add an event from the official schedule below.</small></span></div>
+              : <div className="schedule-list crew-event-list">{crewEventsForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}</time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b>Planned</b></button>)}</div>}
+          </section>
+
+          <section className="calendar-section official-schedule">
+            <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>Official schedule</h2></div><label>Category<select value={eventCategory} onChange={(event) => setEventCategory(event.target.value)}><option value="">All categories</option>{eventCategories.map((category) => <option key={category}>{category}</option>)}</select></label></div>
+            <p className="schedule-count">{scheduleForDate.length} event{scheduleForDate.length === 1 ? "" : "s"} on this day</p>
+            <div className="schedule-list">{scheduleForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b className={plannedIds.has(event.id) ? "planned" : ""} onClick={(click) => { click.stopPropagation(); addEventToPlan(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</b></button>)}</div>
+          </section>
         </div>
       </section>
 
