@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const crews = sqliteTable("crews", {
   id: text("id").primaryKey(),
@@ -37,3 +37,11 @@ export const crewItems = sqliteTable("crew_items", {
   uniqueIndex("crew_items_reference_idx").on(table.crewId, table.kind, table.referenceId),
   index("crew_items_crew_idx").on(table.crewId),
 ]);
+
+export const venuePlacements = sqliteTable("venue_placements", {
+  venueName: text("venue_name").primaryKey(),
+  longitude: real("longitude").notNull(),
+  latitude: real("latitude").notNull(),
+  placedBy: text("placed_by").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});

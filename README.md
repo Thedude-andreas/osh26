@@ -4,6 +4,10 @@ A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
 Drizzle support.
 
+## OSH26 event venues
+
+`public/data/event-venues.json` links calendar venue names to coordinates from OpenStreetMap and the exhibitor booth map. Rebuild the registry with `scripts/build-event-venues.py`. Venues without a safe automatic match appear in the app's **Place venues** mode; manual placements and corrections are stored in D1 and override automatic matches.
+
 ## Prerequisites
 
 - Node.js `>=22.13.0`

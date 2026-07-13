@@ -26,6 +26,8 @@ type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibi
 type BoothLocation = { stallId: string; booth: string; center: [number, number]; bounds: [[number, number], [number, number]]; markerIndex: number };
 type ScheduleEvent = { id: string; title: string; category: string; interests: string[]; venue: string; start: string; end: string; localDate: string; localStart: string; localEnd: string; timezone: string; url: string };
 type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kind: "event"; item: ScheduleEvent; score: number };
+type VenueRegistryEntry = { name: string; eventCount: number; status: "matched" | "unmatched"; source: string | null; sourceName?: string; coordinates: [number, number] | null; booths?: string[] };
+type VenuePlacement = { venueName: string; longitude: number; latitude: number; placedBy: string; updatedAt: string };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
@@ -121,15 +123,27 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const venueMarkersRef = useRef<Marker[]>([]);
+  const placementDraftMarkerRef = useRef<Marker | null>(null);
   const locationsByExhibitorRef = useRef<Map<string, BoothLocation[]>>(new Map());
   const highlightedStallsRef = useRef<string[]>([]);
   const highlightedMarkersRef = useRef<HTMLElement[]>([]);
   const highlightExhibitorRef = useRef<(item: Exhibitor, focusBooth?: string) => void>(() => undefined);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRemovalRef = useRef<PlanItem | null>(null);
+  const placementModeRef = useRef(false);
+  const selectedVenueRef = useRef("");
   const [view, setView] = useState<View>("map");
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
+  const [venueRegistry, setVenueRegistry] = useState<VenueRegistryEntry[]>([]);
+  const [manualVenuePlacements, setManualVenuePlacements] = useState<VenuePlacement[]>([]);
+  const [placementMode, setPlacementMode] = useState(false);
+  const [selectedVenueName, setSelectedVenueName] = useState("");
+  const [placementDraft, setPlacementDraft] = useState<[number, number] | null>(null);
+  const [mapVenueName, setMapVenueName] = useState("");
+  const [venueSaving, setVenueSaving] = useState(false);
+  const [venueError, setVenueError] = useState("");
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [selectedDate, setSelectedDate] = useState("2026-07-20");
@@ -219,6 +233,14 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     return eventSeries.get(seriesKey(selectedEvent)) || [selectedEvent];
   }, [eventSeries, selectedEvent]);
   const timeline = useMemo(() => buildTimeline(crewEventsForDate), [crewEventsForDate]);
+  const manualVenueByName = useMemo(() => new Map(manualVenuePlacements.map((placement) => [placement.venueName, placement])), [manualVenuePlacements]);
+  const effectiveVenues = useMemo(() => venueRegistry.map((venue) => {
+    const manual = manualVenueByName.get(venue.name);
+    return manual ? { ...venue, status: "matched" as const, source: "manual", coordinates: [manual.longitude, manual.latitude] as [number, number] } : venue;
+  }), [manualVenueByName, venueRegistry]);
+  const venueByName = useMemo(() => new Map(effectiveVenues.map((venue) => [venue.name, venue])), [effectiveVenues]);
+  const unmatchedVenues = useMemo(() => effectiveVenues.filter((venue) => !venue.coordinates), [effectiveVenues]);
+  const selectedVenue = venueByName.get(selectedVenueName) || null;
 
   useEffect(() => {
     if (!signedIn) return;
@@ -231,6 +253,16 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   useEffect(() => {
     fetch("/data/events.json").then((response) => response.json()).then((data: { events: ScheduleEvent[] }) => setEvents(data.events)).catch(() => setEvents([]));
   }, []);
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/data/event-venues.json").then((response) => response.json()) as Promise<{ venues: VenueRegistryEntry[] }>,
+      fetch("/api/venues").then((response) => response.ok ? response.json() : { placements: [] }) as Promise<{ placements: VenuePlacement[] }>,
+    ]).then(([registry, manual]) => { setVenueRegistry(registry.venues); setManualVenuePlacements(manual.placements); }).catch(() => setVenueError("Could not load venue placements"));
+  }, []);
+
+  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+  useEffect(() => { selectedVenueRef.current = selectedVenueName; }, [selectedVenueName]);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("join");
@@ -334,6 +366,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         element.title = `${name} · Booth ${booth}`;
         element.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (placementModeRef.current) return;
           const ids = stringArray(feature.properties.exhibitorIds);
           const match = exhibitorData.exhibitors.find((item) => ids.includes(item.id));
           if (match) highlightExhibitorRef.current(match);
@@ -362,17 +395,60 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       map.on("zoomend", updateLabels);
       updateLabels();
       map.on("click", "stall-fill", (event) => {
+        if (placementModeRef.current) return;
         const ids = stringArray(event.features?.[0]?.properties?.exhibitorIds);
         const match = exhibitorData.exhibitors.find((item) => ids.includes(item.id));
         if (match) highlightExhibitorRef.current(match);
       });
       map.on("mouseenter", "stall-fill", () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "stall-fill", () => { map.getCanvas().style.cursor = ""; });
+      map.on("click", (event) => {
+        if (!placementModeRef.current || !selectedVenueRef.current) return;
+        setPlacementDraft([event.lngLat.lng, event.lngLat.lat]);
+      });
       setMapReady(true);
     });
     mapRef.current = map;
-    return () => { markersRef.current.forEach((marker) => marker.remove()); map.remove(); mapRef.current = null; };
+    return () => { markersRef.current.forEach((marker) => marker.remove()); venueMarkersRef.current.forEach((marker) => marker.remove()); placementDraftMarkerRef.current?.remove(); map.remove(); mapRef.current = null; };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    venueMarkersRef.current.forEach((marker) => marker.remove());
+    venueMarkersRef.current = effectiveVenues.filter((venue) => venue.coordinates).map((venue) => {
+      const element = document.createElement("button");
+      element.className = `venue-marker${venue.name === mapVenueName || venue.name === selectedVenueName ? " selected" : ""}`;
+      element.title = venue.name;
+      const dot = document.createElement("i");
+      const label = document.createElement("span");
+      label.textContent = venue.name;
+      element.append(dot, label);
+      element.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (placementModeRef.current) {
+          setSelectedVenueName(venue.name);
+          setPlacementDraft(venue.coordinates);
+        } else setMapVenueName(venue.name);
+        map.flyTo({ center: venue.coordinates!, zoom: Math.max(map.getZoom(), 17.4), duration: 600 });
+      });
+      return new maplibregl.Marker({ element, anchor: "center" }).setLngLat(venue.coordinates!).addTo(map);
+    });
+    const updateVenueLabels = () => venueMarkersRef.current.forEach((marker) => marker.getElement().classList.toggle("show-label", map.getZoom() >= 17.2));
+    map.on("zoomend", updateVenueLabels);
+    updateVenueLabels();
+    return () => map.off("zoomend", updateVenueLabels);
+  }, [effectiveVenues, mapReady, mapVenueName, selectedVenueName]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    placementDraftMarkerRef.current?.remove();
+    placementDraftMarkerRef.current = null;
+    if (!map || !placementMode || !placementDraft) return;
+    const element = document.createElement("div");
+    element.className = "placement-draft-marker";
+    placementDraftMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(placementDraft).addTo(map);
+  }, [placementDraft, placementMode]);
 
   function clearHighlight() {
     const map = mapRef.current;
@@ -556,6 +632,48 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     navigator.geolocation?.getCurrentPosition(({ coords }) => mapRef.current?.flyTo({ center: [coords.longitude, coords.latitude], zoom: 18, duration: 700 }));
   }
 
+  function chooseVenueForPlacement(name: string) {
+    const venue = venueByName.get(name);
+    const map = mapRef.current;
+    setSelectedVenueName(name);
+    setPlacementDraft(venue?.coordinates || null);
+    setVenueError("");
+    if (venue?.coordinates && map) map.flyTo({ center: venue.coordinates, zoom: Math.max(map.getZoom(), 17.4), duration: 600 });
+  }
+
+  function startVenuePlacement() {
+    const venue = unmatchedVenues[0] || effectiveVenues[0];
+    setPlacementMode(true);
+    setMapVenueName("");
+    clearHighlight();
+    setSelected(null);
+    if (venue) chooseVenueForPlacement(venue.name);
+  }
+
+  async function saveVenuePlacement() {
+    if (!selectedVenueName || !placementDraft) return;
+    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    setVenueSaving(true); setVenueError("");
+    try {
+      const response = await fetch("/api/venues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ venueName: selectedVenueName, longitude: placementDraft[0], latitude: placementDraft[1] }) });
+      const data = await response.json() as { placement?: VenuePlacement; error?: string };
+      if (!response.ok || !data.placement) throw new Error(data.error || "Could not save this venue");
+      setManualVenuePlacements((current) => [...current.filter((placement) => placement.venueName !== selectedVenueName), data.placement!]);
+      const next = unmatchedVenues.find((venue) => venue.name !== selectedVenueName);
+      if (next) { setSelectedVenueName(next.name); setPlacementDraft(null); }
+    } catch (error) { setVenueError(error instanceof Error ? error.message : "Could not save this venue"); }
+    finally { setVenueSaving(false); }
+  }
+
+  function showVenueOnMap(name: string) {
+    const venue = venueByName.get(name);
+    if (!venue?.coordinates) return;
+    setView("map");
+    setSelectedEvent(null);
+    setMapVenueName(name);
+    mapRef.current?.flyTo({ center: venue.coordinates, zoom: 18.2, duration: 700 });
+  }
+
   const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const activeDate = CALENDAR_DATES.find((date) => date.value === selectedDate) || CALENDAR_DATES[2];
   const fullDay = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${selectedDate}T12:00:00Z`)).toUpperCase();
@@ -583,9 +701,11 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         <div className={`view map-view ${view === "map" ? "visible" : ""}`}>
           <div ref={mapContainer} className="map" />
           {!mapReady && <div className="map-loading"><span/><strong>Preparing the AirVenture map…</strong></div>}
-          <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors and build a shared plan with your Crew.</p></div>
-          <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>
-          {selected && <article className="place-card">
+          <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors, event venues and build a shared plan.</p></div>
+          {!placementMode && <button className="venue-editor-toggle" onClick={startVenuePlacement}>Place venues <b>{effectiveVenues.length - unmatchedVenues.length}/{effectiveVenues.length}</b></button>}
+          {!placementMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
+          {placementMode && <aside className="venue-editor"><button className="close-card" onClick={() => { setPlacementMode(false); setPlacementDraft(null); }} aria-label="Close venue editor"><Icon name="close"/></button><small>VENUE PLACEMENT</small><h2>{effectiveVenues.length - unmatchedVenues.length} of {effectiveVenues.length} mapped</h2><p>Select a venue, then tap its exact position on the map. Existing automatic matches can also be corrected.</p><label>Event venue<select value={selectedVenueName} onChange={(event) => chooseVenueForPlacement(event.target.value)}>{[...effectiveVenues].sort((a, b) => Number(Boolean(a.coordinates)) - Number(Boolean(b.coordinates)) || a.name.localeCompare(b.name)).map((venue) => <option key={venue.name} value={venue.name}>{venue.coordinates ? "✓ " : "○ "}{venue.name} ({venue.eventCount})</option>)}</select></label>{selectedVenue && <div className="venue-match-status"><strong>{selectedVenue.coordinates ? `Current source: ${selectedVenue.source === "openstreetmap" ? "OpenStreetMap" : selectedVenue.source === "booth-map" ? "booth map" : "manual"}` : "Not mapped yet"}</strong><small>{selectedVenue.sourceName || selectedVenue.booths?.join(", ") || "Tap the map to place it"}</small></div>}{placementDraft && <code>{placementDraft[1].toFixed(6)}, {placementDraft[0].toFixed(6)}</code>}{venueError && <p className="form-error">{venueError}</p>}<button className="primary" disabled={!placementDraft || venueSaving} onClick={saveVenuePlacement}>{venueSaving ? "Saving…" : selectedVenue?.coordinates ? "Save corrected position" : "Save position & next"}</button><small className="placement-help">Purple markers are mapped venues. The yellow target is your pending position.</small></aside>}
+          {selected && !mapVenueName && !placementMode && <article className="place-card">
             <button className="close-card" onClick={closeSelection} aria-label="Close"><Icon name="close"/></button>
             <div className="place-kicker">EXHIBITOR · BOOTH {selected.booths.join(", ")}</div>
             <h2>{selected.name}</h2>
@@ -594,6 +714,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             {selected.description && <p>{selected.description}</p>}
             <button disabled={saving} className={plannedIds.has(selected.id) ? "primary added" : "primary"} onClick={() => addToPlan(selected)}>{plannedIds.has(selected.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button>
           </article>}
+          {mapVenueName && !placementMode && venueByName.get(mapVenueName)?.coordinates && <article className="place-card venue-map-card"><button className="close-card" onClick={() => setMapVenueName("")} aria-label="Close"><Icon name="close"/></button><div className="place-kicker">EVENT VENUE · {venueByName.get(mapVenueName)?.eventCount} EVENTS</div><h2>{mapVenueName}</h2><p>Mapped from {venueByName.get(mapVenueName)?.source === "openstreetmap" ? "OpenStreetMap" : venueByName.get(mapVenueName)?.source === "booth-map" ? "the exhibitor booth map" : "a manual placement"}.</p></article>}
         </div>
 
         <div className={`view content-view ${view === "plan" ? "visible" : ""}`}>
@@ -618,7 +739,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             {plannedItemByReference.get(selectedEvent.id) && <p className="added-by">Added by: <strong>{addedByName(plannedItemByReference.get(selectedEvent.id)!)}</strong></p>}
             {calendarMode === "crew" && selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
-            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
+            <div className="event-detail-actions"><div><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{venueByName.get(selectedEvent.venue)?.coordinates && <button className="show-on-map" onClick={() => showVenueOnMap(selectedEvent.venue)}><Icon name="location"/> Show on map</button>}</div>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
             {calendarMode === "crew" && seriesExpanded && selectedSeries.length > 1 && <div className="series-instances"><div><strong>All instances</strong><small>Select a date and time to view or add that specific instance.</small></div>{selectedSeries.map((instance) => <button key={instance.id} className={instance.id === selectedEvent.id ? "active" : ""} onClick={() => { setSelectedEvent(instance); setSelectedDate(instance.localDate); }}><span><strong>{formatShortDate(instance.localDate)}</strong><small>{instance.localStart}–{instance.localEnd}</small></span><em>{instance.venue}</em><b>{plannedIds.has(instance.id) ? "✓ Added" : "View"}</b></button>)}</div>}
           </article>}
 
