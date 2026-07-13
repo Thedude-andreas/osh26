@@ -57,7 +57,9 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 @keyframes spin { to { transform:rotate(360deg); } }
 .booth-label { max-width:138px; padding:2px 5px; border:1px solid rgba(104,72,19,.3); border-radius:999px; background:rgba(255,250,231,.76); color:#744821; box-shadow:0 1px 3px rgba(0,0,0,.12); cursor:pointer; font-size:9px; font-weight:900; line-height:1.05; text-align:center; white-space:nowrap; }
 .booth-label.full-label { padding:4px 6px; border-color:rgba(20,85,81,.3); border-radius:5px; background:rgba(255,255,255,.78); color:#103839; white-space:normal; }
+.booth-label.search-highlight { z-index:4; border-color:#b92d1b; background:#ef5c43; color:white; box-shadow:0 0 0 4px rgba(239,92,67,.3),0 4px 14px rgba(104,30,19,.3); animation:label-pulse 1.5s ease-in-out infinite; }
 .booth-label[hidden] { display:none; }
+@keyframes label-pulse { 50% { box-shadow:0 0 0 8px rgba(239,92,67,.1),0 4px 14px rgba(104,30,19,.24); } }
 .locate { position:absolute; right:18px; bottom:22px; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--line); border-radius:13px; background:white; color:var(--teal); box-shadow:0 6px 20px rgba(17,48,48,.17); cursor:pointer; }
 .place-card { position:absolute; left:50%; bottom:20px; width:min(560px,calc(100% - 130px)); padding:18px 20px; transform:translateX(-50%); border:1px solid rgba(205,215,210,.95); border-radius:18px; background:rgba(255,253,248,.96); box-shadow:0 16px 45px rgba(20,49,49,.23); backdrop-filter:blur(12px); }
 .place-card h2 { margin:6px 40px 8px 0; font-size:20px; line-height:1.12; }
@@ -66,6 +68,10 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .close-card svg,.modal-close svg { width:17px; }
 .chips { display:flex; flex-wrap:wrap; gap:5px; }
 .chips span { padding:4px 7px; border-radius:999px; background:#dcefeb; color:#185f5c; font-size:8px; font-weight:800; }
+.booth-jumps { display:flex; align-items:center; gap:9px; margin:1px 0 9px; }
+.booth-jumps small { color:var(--muted); font-size:8px; font-weight:900; letter-spacing:.1em; }
+.booth-jumps > div { display:flex; flex-wrap:wrap; gap:5px; }
+.booth-jumps button { padding:5px 9px; border:1px solid #ef9c8c; border-radius:999px; background:#fff0eb; color:#a73927; cursor:pointer; font-size:10px; font-weight:900; }
 .primary { display:flex; align-items:center; justify-content:center; gap:7px; width:100%; min-height:42px; padding:10px 15px; border:0; border-radius:11px; background:var(--coral); color:white; cursor:pointer; font-size:11px; font-weight:900; }
 .primary:hover { filter:brightness(.97); }
 .primary:disabled { opacity:.45; cursor:not-allowed; }

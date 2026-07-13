@@ -22,8 +22,16 @@ type Feature = {
 type Collection = { type: "FeatureCollection"; features: Feature[] };
 type Crew = { id: string; name: string; inviteCode: string; role: "owner" | "member" };
 type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null };
+type BoothLocation = { stallId: string; booth: string; center: [number, number]; bounds: [[number, number], [number, number]]; markerIndex: number };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value !== "string") return [];
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed.map(String) : [value]; }
+  catch { return [value]; }
+}
 
 function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" }) {
   const paths = {
@@ -43,9 +51,12 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const locationsByExhibitorRef = useRef<Map<string, BoothLocation[]>>(new Map());
+  const highlightedStallsRef = useRef<string[]>([]);
+  const highlightedMarkersRef = useRef<HTMLElement[]>([]);
+  const highlightExhibitorRef = useRef<(item: Exhibitor, focusBooth?: string) => void>(() => undefined);
   const [view, setView] = useState<View>("map");
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
-  const [labels, setLabels] = useState<Collection | null>(null);
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
@@ -130,16 +141,15 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       const labelData = await labelResponse.json() as Collection;
       const exhibitorData = await exhibitorResponse.json() as { exhibitors: Exhibitor[] };
       setExhibitors(exhibitorData.exhibitors);
-      setLabels(labelData);
       map.addSource("stalls", { type: "geojson", data: stalls as never });
       map.addLayer({
         id: "stall-fill", type: "fill", source: "stalls",
         paint: {
-          "fill-color": ["case", ["boolean", ["feature-state", "planned"], false], "#ef5b3f", "#f1b84b"],
-          "fill-opacity": ["case", ["boolean", ["feature-state", "planned"], false], 0.68, 0.34],
+          "fill-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#ff4f32", ["boolean", ["feature-state", "planned"], false], "#168b82", "#f1b84b"],
+          "fill-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 0.8, ["boolean", ["feature-state", "planned"], false], 0.62, 0.34],
         },
       });
-      map.addLayer({ id: "stall-line", type: "line", source: "stalls", paint: { "line-color": "#72551e", "line-width": ["interpolate", ["linear"], ["zoom"], 15, 0.45, 20, 1.2] } });
+      map.addLayer({ id: "stall-line", type: "line", source: "stalls", paint: { "line-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#c92f1c", "#72551e"], "line-width": ["case", ["boolean", ["feature-state", "highlighted"], false], 3, ["interpolate", ["linear"], ["zoom"], 15, 0.45, 20, 1.2]] } });
 
       const stallsById = new Map(stalls.features.map((stall) => [String(stall.id), stall]));
       const markerMeta = labelData.features.map((feature) => {
@@ -156,8 +166,18 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         const center: [number, number] = Number.isFinite(bounds.minX)
           ? [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2]
           : feature.geometry.coordinates as [number, number];
-        return { feature, ring, center };
+        const normalizedBounds: [[number, number], [number, number]] = Number.isFinite(bounds.minX)
+          ? [[bounds.minX, bounds.minY], [bounds.maxX, bounds.maxY]]
+          : [center, center];
+        return { feature, ring, center, bounds: normalizedBounds };
       });
+
+      const locationsByExhibitor = new Map<string, BoothLocation[]>();
+      markerMeta.forEach(({ feature, center, bounds }, markerIndex) => {
+        const location = { stallId: String(feature.properties.stallId), booth: String(feature.properties.boothNumber || ""), center, bounds, markerIndex };
+        stringArray(feature.properties.exhibitorIds).forEach((id) => locationsByExhibitor.set(id, [...(locationsByExhibitor.get(id) || []), location]));
+      });
+      locationsByExhibitorRef.current = locationsByExhibitor;
 
       markersRef.current = markerMeta.map(({ feature, center }) => {
         const element = document.createElement("button");
@@ -168,9 +188,9 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         element.title = `${name} · Booth ${booth}`;
         element.addEventListener("click", (event) => {
           event.stopPropagation();
-          const ids = (feature.properties.exhibitorIds || []) as string[];
+          const ids = stringArray(feature.properties.exhibitorIds);
           const match = exhibitorData.exhibitors.find((item) => ids.includes(item.id));
-          if (match) setSelected(match);
+          if (match) highlightExhibitorRef.current(match);
         });
         return new maplibregl.Marker({ element, anchor: "center" }).setLngLat(center).addTo(map);
       });
@@ -184,20 +204,21 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             ? (Math.max(...projected.map((point) => point.x)) - Math.min(...projected.map((point) => point.x)))
               * (Math.max(...projected.map((point) => point.y)) - Math.min(...projected.map((point) => point.y)))
             : 0;
-          const full = zoom >= 18.5 || pixelArea >= 1800;
+          const highlighted = element.classList.contains("search-highlight");
+          const full = highlighted || zoom >= 18.5 || pixelArea >= 1800;
           element.classList.toggle("full-label", full);
           element.textContent = full
             ? `${String(feature.properties.displayName || feature.properties.boothNumber)} · ${String(feature.properties.boothNumber || "")}`
             : String(feature.properties.boothNumber || "");
-          element.hidden = zoom < 15.6 || (!full && pixelArea < 70);
+          element.hidden = !highlighted && (zoom < 15.6 || (!full && pixelArea < 70));
         });
       };
       map.on("zoomend", updateLabels);
       updateLabels();
       map.on("click", "stall-fill", (event) => {
-        const ids = (event.features?.[0]?.properties?.exhibitorIds || []) as string[];
+        const ids = stringArray(event.features?.[0]?.properties?.exhibitorIds);
         const match = exhibitorData.exhibitors.find((item) => ids.includes(item.id));
-        if (match) setSelected(match);
+        if (match) highlightExhibitorRef.current(match);
       });
       map.on("mouseenter", "stall-fill", () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "stall-fill", () => { map.getCanvas().style.cursor = ""; });
@@ -207,12 +228,50 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     return () => { markersRef.current.forEach((marker) => marker.remove()); map.remove(); mapRef.current = null; };
   }, []);
 
-  function selectExhibitor(item: Exhibitor) {
+  function clearHighlight() {
+    const map = mapRef.current;
+    if (map?.getSource("stalls")) highlightedStallsRef.current.forEach((id) => map.setFeatureState({ source: "stalls", id }, { highlighted: false }));
+    highlightedMarkersRef.current.forEach((element) => element.classList.remove("search-highlight"));
+    highlightedStallsRef.current = [];
+    highlightedMarkersRef.current = [];
+  }
+
+  function highlightExhibitor(item: Exhibitor, focusBooth?: string) {
+    const map = mapRef.current;
     setSelected(item);
+    if (!map || !map.getSource("stalls")) return;
+    clearHighlight();
+    const locations = locationsByExhibitorRef.current.get(item.id) || [];
+    locations.forEach((location) => {
+      map.setFeatureState({ source: "stalls", id: location.stallId }, { highlighted: true });
+      const element = markersRef.current[location.markerIndex]?.getElement();
+      if (element) { element.classList.add("search-highlight"); highlightedMarkersRef.current.push(element); }
+    });
+    highlightedStallsRef.current = locations.map((location) => location.stallId);
+    const focused = focusBooth ? locations.find((location) => location.booth === focusBooth) : undefined;
+    if (focused || locations.length === 1) {
+      map.flyTo({ center: (focused || locations[0]).center, zoom: Math.max(map.getZoom(), 18.6), duration: 700 });
+      return;
+    }
+    if (locations.length > 1) {
+      const bounds = new maplibregl.LngLatBounds();
+      locations.forEach((location) => { bounds.extend(location.bounds[0]); bounds.extend(location.bounds[1]); });
+      const mobile = window.innerWidth <= 760;
+      map.fitBounds(bounds, { padding: mobile ? { top: 150, right: 45, bottom: 270, left: 45 } : { top: 110, right: 90, bottom: 210, left: 90 }, maxZoom: 18.4, duration: 750 });
+    }
+  }
+
+  function selectExhibitor(item: Exhibitor) {
     setQuery("");
-    const feature = labels?.features.find((entry) => ((entry.properties.exhibitorIds || []) as string[]).includes(item.id));
-    if (feature) mapRef.current?.flyTo({ center: feature.geometry.coordinates as [number, number], zoom: 18.6, duration: 700 });
+    highlightExhibitor(item);
     setView("map");
+  }
+
+  useEffect(() => { highlightExhibitorRef.current = highlightExhibitor; });
+
+  function closeSelection() {
+    clearHighlight();
+    setSelected(null);
   }
 
   function addToPlan(item: Exhibitor) {
@@ -298,9 +357,10 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors and build a shared plan with your Crew.</p></div>
           <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>
           {selected && <article className="place-card">
-            <button className="close-card" onClick={() => setSelected(null)} aria-label="Close"><Icon name="close"/></button>
+            <button className="close-card" onClick={closeSelection} aria-label="Close"><Icon name="close"/></button>
             <div className="place-kicker">EXHIBITOR · BOOTH {selected.booths.join(", ")}</div>
             <h2>{selected.name}</h2>
+            {selected.booths.length > 1 && <div className="booth-jumps"><small>SHOW BOOTH</small><div>{selected.booths.map((booth) => <button key={booth} onClick={() => highlightExhibitor(selected, booth)}>{booth}</button>)}</div></div>}
             <div className="chips">{selected.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}</div>
             {selected.description && <p>{selected.description}</p>}
             <button disabled={saving} className={plannedIds.has(selected.id) ? "primary added" : "primary"} onClick={() => addToPlan(selected)}>{plannedIds.has(selected.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button>
