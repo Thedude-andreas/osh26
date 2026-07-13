@@ -16,6 +16,11 @@ OSM_ALIASES = {
     "Aeroplane Workshop": "Aeroplane Workshop",
     "Boeing Plaza": "Boeing Plaza",
     "EAA Blue Barn Featuring EAA Chapters, EAA Young Eagles, and EAA Eagle Flights": "EAA Blue Barn",
+    "EAA Museum - Hilton Theater": "EAA Aviation Museum",
+    "EAA Museum - Skyscape Theater": "Skyscape Theater",
+    "EAA Museum - Vette Theater": "EAA Aviation Museum",
+    "EAA Pilot Proficiency Center": "Education Center",
+    "EAA Youth Education Center": "Education Center",
     "EAA Wearhouse": "EAA Wearhouse",
     "FAA Aviation Safety Center, Flight Service Station": "FAA Aviation Safety Center",
     "Fergus Chapel and Compass Hill": "Compass Hill",
@@ -69,12 +74,31 @@ BOOTH_MATCHES = {
     "Hartzell Propeller 296-297": ["296", "297"],
     "Lycoming Engines Booth 277": ["277"],
     "Michelin Aircraft Tire Co.": ["434", "435", "436"],
+    "NAFI Booth": ["354"],
     "NASM Tent Booth 328": ["328"],
     "Redbird Sim Lab": ["301"],
     "Rotax Aircraft Engines Booth": ["265"],
     "Signia Aerospace 289": ["289"],
     "Southwest Airlines Booth 502": ["502"],
     "Superior Air Parts Booth": ["258"],
+}
+
+# Positions read from EAA's 2026 Official Visitors Map. The Forums/Workshops
+# inset was calibrated against the OSM-mapped forum stages; the remaining
+# positions use the map's printed grid and nearby OSM anchors. They are kept
+# separate from OSM matches so the placement editor can show their provenance.
+VISITOR_MAP_MATCHES = {
+    "Charles W. Harris Youth Aviation Center": {"coordinates": [-88.56087356, 43.97640863], "sourceName": "Official Visitors Map · grid L-15"},
+    "EAA Member Center": {"coordinates": [-88.56405959, 43.97838084], "sourceName": "Official Visitors Map · grid J-13"},
+    "EAA WomenVenture Center": {"coordinates": [-88.56244034, 43.98205540], "sourceName": "Official Visitors Map · Forums inset"},
+    "Fly-In Theater Presented by PenFed": {"coordinates": [-88.57301664, 43.97797838], "sourceName": "Official Visitors Map · grid E-13"},
+    "Homebuilts in Review": {"coordinates": [-88.56055324, 43.98345935], "sourceName": "Official Visitors Map · Workshops 24"},
+    "International Federal Pavilion": {"coordinates": [-88.56523807, 43.97773545], "sourceName": "Official Visitors Map · grid J-13"},
+    "International Visitors Tent/Translation Services": {"coordinates": [-88.56280000, 43.97947432], "sourceName": "Official Visitors Map · grid K-12"},
+    "PHP Tent": {"coordinates": [-88.57004000, 43.97786930], "sourceName": "Official Visitors Map · grid F-13/14"},
+    "RC Flying Field": {"coordinates": [-88.57485502, 43.98480574], "sourceName": "Official Visitors Map · RC Flying Area"},
+    "Replica Fighters HQ": {"coordinates": [-88.56378629, 43.98384039], "sourceName": "Official Visitors Map · grid J-9"},
+    "VAA Tall Pines Cafe": {"coordinates": [-88.56291358, 43.98248036], "sourceName": "Official Visitors Map · Tall Pines Cafe, grid K-9"},
 }
 
 
@@ -122,7 +146,7 @@ def main() -> None:
         booth = str(feature["properties"].get("boothNumber", ""))
         labels_by_booth.setdefault(booth, []).append(feature["geometry"]["coordinates"])
     osm = {}
-    for source in ("osm-airventure-grounds.xml", "osm-airventure-north.xml", "osm-airventure-south.xml"):
+    for source in ("osm-airventure-grounds.xml", "osm-airventure-north.xml", "osm-airventure-south.xml", "osm-airventure-west.xml"):
         osm.update(osm_features(ROOT / "data/import" / source))
 
     registry = []
@@ -145,6 +169,13 @@ def main() -> None:
                     "booths": BOOTH_MATCHES[name],
                 })
                 geometry = {"type": "Point", "coordinates": entry["coordinates"]}
+        elif name in VISITOR_MAP_MATCHES:
+            match = VISITOR_MAP_MATCHES[name]
+            entry.update({
+                "status": "matched", "source": "visitor-map", "coordinates": match["coordinates"],
+                "sourceName": match["sourceName"],
+            })
+            geometry = {"type": "Point", "coordinates": entry["coordinates"]}
         registry.append(entry)
         if geometry:
             geojson.append({
