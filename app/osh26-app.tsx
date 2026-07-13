@@ -277,14 +277,23 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         paint: {
           "fill-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#ff4f32", ["boolean", ["feature-state", "planned"], false], "#168b82", "#f1b84b"],
           "fill-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 0.8, ["boolean", ["feature-state", "planned"], false], 0.62, 0.34],
+          "fill-outline-color": "#493718",
         },
       });
       map.addLayer({
-        id: "stall-line", type: "line", source: "stalls",
+        id: "stall-line", type: "line", source: "stalls", layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#b82f1d", "#55421f"],
-          "line-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 1, 0.9],
-          "line-width": ["case", ["boolean", ["feature-state", "highlighted"], false], 3.4, ["interpolate", ["linear"], ["zoom"], 13, 0.9, 16, 1.15, 20, 1.8]],
+          "line-color": "#493718",
+          "line-opacity": 0.96,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 13, 1.35, 16, 1.8, 20, 2.5],
+        },
+      });
+      map.addLayer({
+        id: "stall-highlight-line", type: "line", source: "stalls", layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#b82f1d",
+          "line-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 1, 0],
+          "line-width": 3.8,
         },
       });
 
