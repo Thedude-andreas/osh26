@@ -58,11 +58,29 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [crewError, setCrewError] = useState("");
   const [qrCode, setQrCode] = useState("");
 
-  const filtered = useMemo(() => {
-    const value = query.trim().toLowerCase();
+  const searchMatches = useMemo(() => {
+    const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const value = normalize(query.trim());
     if (!value) return [];
-    return exhibitors.filter((item) => [item.name, ...item.booths, ...item.tags].some((text) => text.toLowerCase().includes(value))).slice(0, 8);
+    return exhibitors.map((item) => {
+      const name = normalize(item.name);
+      const booths = item.booths.map(normalize);
+      const tags = item.tags.map(normalize);
+      const nameWords = name.split(/[^a-z0-9]+/);
+      let score = 0;
+      if (name === value) score = 1000;
+      else if (booths.some((booth) => booth === value)) score = 950;
+      else if (name.startsWith(value)) score = 900;
+      else if (nameWords.some((word) => word.startsWith(value))) score = 850;
+      else if (name.includes(value)) score = 750;
+      else if (booths.some((booth) => booth.includes(value))) score = 700;
+      else if (tags.some((tag) => tag === value)) score = 500;
+      else if (tags.some((tag) => tag.startsWith(value))) score = 400;
+      else if (tags.some((tag) => tag.includes(value))) score = 300;
+      return { item, score };
+    }).filter((match) => match.score > 0).sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name)).map((match) => match.item);
   }, [exhibitors, query]);
+  const visibleResults = searchMatches.slice(0, 50);
   const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
 
   useEffect(() => {
@@ -269,7 +287,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div className="mobile-brand"><div className="logo">26</div><strong>OSH26</strong></div>
           <button className="crew-switcher" onClick={() => setCrewModal(crew ? "manage" : "create")}><Icon name="crew"/><span><small>YOUR CREW</small><strong>{crew?.name || "Create or join a Crew"}</strong></span><em>⌄</em></button>
           <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, booths or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
-            {filtered.length > 0 && <div className="search-menu">{filtered.map((item) => <button key={item.id} onClick={() => selectExhibitor(item)}><span><strong>{item.name}</strong><small>{item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{item.booths.join(", ")}</b></button>)}</div>}
+            {visibleResults.length > 0 && <div className="search-menu"><div className="search-scroll">{visibleResults.map((item) => <button key={item.id} onClick={() => selectExhibitor(item)}><span><strong>{item.name}</strong><small>{item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{item.booths.join(", ")}</b></button>)}</div><div className="search-count">{searchMatches.length > visibleResults.length ? `Showing ${visibleResults.length} of ${searchMatches.length} results` : `${searchMatches.length} result${searchMatches.length === 1 ? "" : "s"}`}</div></div>}
           </div>
           <div className="status-pill"><i /> Offline ready</div>
         </header>

@@ -32,6 +32,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .search-box > button { display:grid; place-items:center; padding:3px; border:0; background:transparent; cursor:pointer; color:var(--muted); }
 .search-box > button svg { width:17px; }
 .search-menu { position:absolute; left:0; right:0; top:51px; overflow:hidden; border:1px solid var(--line); border-radius:13px; background:white; box-shadow:0 18px 45px rgba(15,47,47,.2); }
+.search-scroll { max-height:min(58dvh,560px); overflow-y:auto; overscroll-behavior:contain; }
 .search-menu button { display:flex; justify-content:space-between; align-items:center; gap:15px; width:100%; padding:11px 13px; border:0; border-bottom:1px solid #eef1ed; background:white; cursor:pointer; text-align:left; }
 .search-menu button:hover { background:#f1f7f3; }
 .search-menu span { min-width:0; }
@@ -39,6 +40,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .search-menu strong { font-size:12px; }
 .search-menu small { margin-top:3px; color:var(--muted); font-size:9px; }
 .search-menu b { flex:0 0 auto; padding:4px 7px; border-radius:999px; background:#fff0d3; color:#8a541e; font-size:10px; }
+.search-count { padding:8px 12px; border-top:1px solid #e4e9e5; background:#f7f8f5; color:var(--muted); font-size:9px; font-weight:800; text-align:center; }
 .status-pill { justify-self:end; display:flex; align-items:center; gap:7px; color:var(--muted); font-size:10px; font-weight:800; }
 .status-pill i { width:7px; height:7px; border-radius:50%; background:#48a889; box-shadow:0 0 0 3px #dff2e9; }
 .view { position:absolute; inset:66px 0 0; display:none; min-height:0; }
