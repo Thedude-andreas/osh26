@@ -70,7 +70,9 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [selectedDate, setSelectedDate] = useState("2026-07-20");
+  const [calendarMode, setCalendarMode] = useState<"crew" | "all">("crew");
   const [eventCategory, setEventCategory] = useState("");
+  const [eventVenue, setEventVenue] = useState("");
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [crew, setCrew] = useState<Crew | null>(null);
@@ -127,10 +129,13 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   }, [events, exhibitors, query]);
   const visibleResults = searchMatches.slice(0, 50);
   const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
+  const crewPlan = useMemo(() => plan.filter((item) => item.kind === "exhibitor"), [plan]);
+  const crewCalendarItems = useMemo(() => plan.filter((item) => item.kind === "event"), [plan]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const eventCategories = useMemo(() => Array.from(new Set(events.map((event) => event.category))).sort(), [events]);
-  const scheduleForDate = useMemo(() => events.filter((event) => event.localDate === selectedDate && (!eventCategory || event.category === eventCategory)), [eventCategory, events, selectedDate]);
-  const crewEventsForDate = useMemo(() => plan.filter((item) => item.kind === "event").map((item) => eventById.get(item.referenceId)).filter((event): event is ScheduleEvent => Boolean(event && event.localDate === selectedDate)).sort((a, b) => a.start.localeCompare(b.start)), [eventById, plan, selectedDate]);
+  const eventVenues = useMemo(() => Array.from(new Set(events.map((event) => event.venue).filter(Boolean))).sort(), [events]);
+  const scheduleForDate = useMemo(() => events.filter((event) => event.localDate === selectedDate && (!eventCategory || event.category === eventCategory) && (!eventVenue || event.venue === eventVenue)), [eventCategory, eventVenue, events, selectedDate]);
+  const crewEventsForDate = useMemo(() => crewCalendarItems.map((item) => eventById.get(item.referenceId)).filter((event): event is ScheduleEvent => Boolean(event && event.localDate === selectedDate && (!eventCategory || event.category === eventCategory) && (!eventVenue || event.venue === eventVenue))).sort((a, b) => a.start.localeCompare(b.start)), [crewCalendarItems, eventById, eventCategory, eventVenue, selectedDate]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -315,6 +320,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     setSelected(null);
     setSelectedEvent(item);
     setSelectedDate(item.localDate);
+    setCalendarMode("all");
     setView("calendar");
   }
 
@@ -336,7 +342,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       .finally(() => setSaving(false));
   }
 
-  function addEventToPlan(item: ScheduleEvent) {
+  function addEventToCalendar(item: ScheduleEvent) {
     if (!crew) { setCrewModal("create"); return; }
     if (plannedIds.has(item.id)) return;
     setSaving(true);
@@ -413,7 +419,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     <main className="app-shell">
       <aside className="rail" aria-label="Primary navigation">
         <div className="logo">26</div>
-        <nav>{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item} /><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && plan.length > 0 && <b>{plan.length}</b>}</button>)}</nav>
+        <nav>{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item} /><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
         <button className="avatar" title={userName}>{initials || "GP"}</button>
       </aside>
 
@@ -446,15 +452,18 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
         </div>
 
         <div className={`view content-view ${view === "plan" ? "visible" : ""}`}>
-          <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Everything your Crew wants to see, in one place.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add places</button></div>
+          <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Exhibitors and booths your Crew wants to visit.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add exhibitors</button></div>
           {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
-          : plan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors or scheduled events." action="Explore the map" onAction={() => setView("map")} />
-          : <div className="plan-list">{plan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>{item.kind}</small><h2>{item.title}</h2><p>{item.meta}</p></div><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span></article>)}</div>}
+          : crewPlan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors your Crew wants to visit." action="Explore the map" onAction={() => setView("map")} />
+          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p></div><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span></article>)}</div>}
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
-          <div className="content-header"><div><span>{fullDay} · JULY {activeDate.date}</span><h1>Crew Calendar</h1><p>Choose from the official AirVenture schedule and plan together.</p></div><button className="date-button" onClick={() => { setSelectedDate("2026-07-20"); setSelectedEvent(null); }}>Opening day</button></div>
+          <div className="content-header"><div><span>{fullDay} · JULY {activeDate.date}</span><h1>{calendarMode === "crew" ? "Crew Calendar" : "Event Schedule"}</h1><p>{calendarMode === "crew" ? "Your Crew's shared, chronological event calendar." : "Browse the complete official AirVenture schedule."}</p></div><button className="date-button" onClick={() => { setSelectedDate("2026-07-20"); setSelectedEvent(null); }}>Opening day</button></div>
+          <div className="calendar-mode-tabs"><button className={calendarMode === "crew" ? "active" : ""} onClick={() => { setCalendarMode("crew"); setSelectedEvent(null); }}>Crew Calendar <b>{crewCalendarItems.length}</b></button><button className={calendarMode === "all" ? "active" : ""} onClick={() => { setCalendarMode("all"); setSelectedEvent(null); }}>All Events <b>{events.length}</b></button></div>
           <div className="calendar-strip">{CALENDAR_DATES.map((date) => <button key={date.value} className={date.value === selectedDate ? "active" : ""} onClick={() => { setSelectedDate(date.value); setSelectedEvent(null); }}><small>{date.day}</small><strong>{date.date}</strong></button>)}</div>
+
+          <div className="calendar-filters"><label>Category<select value={eventCategory} onChange={(event) => setEventCategory(event.target.value)}><option value="">All categories</option>{eventCategories.map((category) => <option key={category}>{category}</option>)}</select></label><label>Place<select value={eventVenue} onChange={(event) => setEventVenue(event.target.value)}><option value="">All places</option>{eventVenues.map((venue) => <option key={venue}>{venue}</option>)}</select></label>{(eventCategory || eventVenue) && <button onClick={() => { setEventCategory(""); setEventVenue(""); }}>Clear filters</button>}</div>
 
           {selectedEvent && <article className="event-detail">
             <button className="close-card" onClick={() => setSelectedEvent(null)} aria-label="Close"><Icon name="close"/></button>
@@ -462,24 +471,22 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             <h2>{selectedEvent.title}</h2>
             <p className="event-venue">{selectedEvent.venue}</p>
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
-            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a><button disabled={saving} className={plannedIds.has(selectedEvent.id) ? "primary added" : "primary"} onClick={() => addEventToPlan(selectedEvent)}>{plannedIds.has(selectedEvent.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button></div>
+            <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a><button disabled={saving} className={plannedIds.has(selectedEvent.id) ? "primary added" : "primary"} onClick={() => addEventToCalendar(selectedEvent)}>{plannedIds.has(selectedEvent.id) ? <><Icon name="check"/> Added to Crew Calendar</> : "+ Add to Crew Calendar"}</button></div>
           </article>}
 
-          <section className="calendar-section crew-schedule">
-            <div className="calendar-section-head"><div><small>SHARED PLAN</small><h2>Your Crew&apos;s day</h2></div><b>{crewEventsForDate.length}</b></div>
-            {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No Crew events on this day</strong><small>Add an event from the official schedule below.</small></span></div>
-              : <div className="schedule-list crew-event-list">{crewEventsForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}</time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b>Planned</b></button>)}</div>}
-          </section>
-
-          <section className="calendar-section official-schedule">
-            <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>Official schedule</h2></div><label>Category<select value={eventCategory} onChange={(event) => setEventCategory(event.target.value)}><option value="">All categories</option>{eventCategories.map((category) => <option key={category}>{category}</option>)}</select></label></div>
-            <p className="schedule-count">{scheduleForDate.length} event{scheduleForDate.length === 1 ? "" : "s"} on this day</p>
-            <div className="schedule-list">{scheduleForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b className={plannedIds.has(event.id) ? "planned" : ""} onClick={(click) => { click.stopPropagation(); addEventToPlan(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</b></button>)}</div>
-          </section>
+          {calendarMode === "crew" ? <section className="calendar-section crew-schedule">
+            <div className="calendar-section-head"><div><small>SHARED CREW CALENDAR</small><h2>{fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</h2></div><b>{crewEventsForDate.length}</b></div>
+            {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No matching Crew events on this day</strong><small>Open All Events to add scheduled activities.</small></span><button onClick={() => setCalendarMode("all")}>Browse events</button></div>
+              : <div className="schedule-list crew-event-list calendar-timeline">{crewEventsForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category}</small><em>{event.venue}</em></span><b>In Crew Calendar</b></button>)}</div>}
+          </section> : <section className="calendar-section official-schedule">
+            <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>All scheduled events</h2></div><b>{scheduleForDate.length}</b></div>
+            <p className="schedule-count">Chronological schedule for {fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</p>
+            <div className="schedule-list">{scheduleForDate.map((event) => <button key={event.id} className="schedule-event" onClick={() => setSelectedEvent(event)}><time>{event.localStart}<small>{event.localEnd}</small></time><span><strong>{event.title}</strong><small>{event.category} · {event.venue}</small></span><b className={plannedIds.has(event.id) ? "planned" : ""} onClick={(click) => { click.stopPropagation(); addEventToCalendar(event); }}>{plannedIds.has(event.id) ? "✓ Added" : "+ Add"}</b></button>)}</div>
+          </section>}
         </div>
       </section>
 
-      <nav className="bottom-nav">{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item}/><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && plan.length > 0 && <b>{plan.length}</b>}</button>)}</nav>
+      <nav className="bottom-nav">{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item}/><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
 
       {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name="crew"/></div>{crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || !draftCrewName.trim()} onClick={createCrew}>{saving ? "Creating…" : "Create Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("join"); }}>I have an invite code</button></> : crewModal === "join" ? <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || joinCode.trim().length < 4} onClick={joinCrew}>{saving ? "Joining…" : "Join Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("create"); }}>Create a new Crew instead</button></> : crew ? <><span>INVITE CREW MEMBERS</span><h1>{crew.name}</h1><p>Share this invite code or let a friend scan the QR code.</p>{qrCode && <Image unoptimized className="invite-qr" width={180} height={180} src={qrCode} alt={`QR code to join ${crew.name}`} />}<div className="invite-code"><small>INVITE CODE</small><strong>{crew.inviteCode}</strong></div><button className="primary" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/?join=${crew.inviteCode}`)}>Copy invite link</button></> : null}</section></div>}
 
