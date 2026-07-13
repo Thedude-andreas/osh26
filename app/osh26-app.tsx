@@ -279,7 +279,14 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           "fill-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 0.8, ["boolean", ["feature-state", "planned"], false], 0.62, 0.34],
         },
       });
-      map.addLayer({ id: "stall-line", type: "line", source: "stalls", paint: { "line-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#c92f1c", "#72551e"], "line-width": ["case", ["boolean", ["feature-state", "highlighted"], false], 3, ["interpolate", ["linear"], ["zoom"], 15, 0.45, 20, 1.2]] } });
+      map.addLayer({
+        id: "stall-line", type: "line", source: "stalls",
+        paint: {
+          "line-color": ["case", ["boolean", ["feature-state", "highlighted"], false], "#b82f1d", "#55421f"],
+          "line-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 1, 0.9],
+          "line-width": ["case", ["boolean", ["feature-state", "highlighted"], false], 3.4, ["interpolate", ["linear"], ["zoom"], 13, 0.9, 16, 1.15, 20, 1.8]],
+        },
+      });
 
       const stallsById = new Map(stalls.features.map((stall) => [String(stall.id), stall]));
       const markerMeta = labelData.features.map((feature) => {
