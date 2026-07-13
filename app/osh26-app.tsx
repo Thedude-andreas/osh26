@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
+import QRCode from "qrcode";
 
 type View = "map" | "plan" | "calendar";
 type Exhibitor = {
@@ -18,7 +20,8 @@ type Feature = {
   properties: Record<string, unknown>;
 };
 type Collection = { type: "FeatureCollection"; features: Feature[] };
-type PlanItem = { id: string; kind: "exhibitor" | "event"; title: string; meta: string; visited: boolean };
+type Crew = { id: string; name: string; inviteCode: string; role: "owner" | "member" };
+type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 
@@ -46,18 +49,44 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
-  const [crewName, setCrewName] = useState<string | null>(null);
-  const [crewModal, setCrewModal] = useState<"create" | "join" | null>(null);
+  const [crew, setCrew] = useState<Crew | null>(null);
+  const [crewModal, setCrewModal] = useState<"create" | "join" | "manage" | null>(null);
   const [draftCrewName, setDraftCrewName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [mapReady, setMapReady] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [crewError, setCrewError] = useState("");
+  const [qrCode, setQrCode] = useState("");
 
   const filtered = useMemo(() => {
     const value = query.trim().toLowerCase();
     if (!value) return [];
     return exhibitors.filter((item) => [item.name, ...item.booths, ...item.tags].some((text) => text.toLowerCase().includes(value))).slice(0, 8);
   }, [exhibitors, query]);
-  const plannedIds = useMemo(() => new Set(plan.map((item) => item.id)), [plan]);
+  const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    fetch("/api/crew").then(async (response) => {
+      if (!response.ok) throw new Error("Could not load your Crew");
+      return response.json() as Promise<{ crew: Crew | null; items: PlanItem[] }>;
+    }).then((data) => { setCrew(data.crew); setPlan(data.items); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
+  }, [signedIn]);
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("join");
+    if (!code) return;
+    queueMicrotask(() => {
+      setJoinCode(code.toUpperCase().slice(0, 6));
+      setCrewModal("join");
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!crew || crewModal !== "manage") return;
+    const inviteUrl = `${window.location.origin}/?join=${crew.inviteCode}`;
+    QRCode.toDataURL(inviteUrl, { width: 220, margin: 1, color: { dark: "#102d2d", light: "#fffdf8" } }).then(setQrCode);
+  }, [crew, crewModal]);
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
@@ -146,24 +175,56 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   }
 
   function addToPlan(item: Exhibitor) {
-    if (!crewName) { setCrewModal("create"); return; }
+    if (!crew) { setCrewModal("create"); return; }
     if (plannedIds.has(item.id)) return;
-    setPlan((current) => [...current, { id: item.id, kind: "exhibitor", title: item.name, meta: `Booth ${item.booths.join(", ")}`, visited: false }]);
+    setSaving(true);
+    fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", crewId: crew.id, kind: "exhibitor", referenceId: item.id, title: item.name, meta: `Booth ${item.booths.join(", ")}` }) })
+      .then(async (response) => { if (!response.ok) throw new Error("Could not add this exhibitor"); return response.json() as Promise<{ item: PlanItem }>; })
+      .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
+      .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Plan"))
+      .finally(() => setSaving(false));
   }
 
-  function createCrew() {
+  async function createCrew() {
     const name = draftCrewName.trim();
     if (!name) return;
-    setCrewName(name);
-    setCrewModal(null);
-    setDraftCrewName("");
+    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    setSaving(true); setCrewError("");
+    try {
+      const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", name }) });
+      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; error?: string };
+      if (!response.ok || !data.crew) throw new Error(data.error || "Could not create the Crew");
+      setCrew(data.crew); setPlan(data.items || []); setCrewModal("manage"); setDraftCrewName("");
+    } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not create the Crew"); }
+    finally { setSaving(false); }
   }
 
-  function joinCrew() {
+  async function joinCrew() {
     if (joinCode.trim().length < 4) return;
-    setCrewName("AirVenture Crew");
-    setCrewModal(null);
-    setJoinCode("");
+    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    setSaving(true); setCrewError("");
+    try {
+      const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "join", code: joinCode }) });
+      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; error?: string };
+      if (!response.ok || !data.crew) throw new Error(data.error || "Could not join the Crew");
+      setCrew(data.crew); setPlan(data.items || []); setCrewModal(null); setJoinCode("");
+    } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not join the Crew"); }
+    finally { setSaving(false); }
+  }
+
+  async function toggleVisited(item: PlanItem) {
+    if (!crew) return;
+    const visited = !item.visited;
+    setPlan((current) => current.map((entry) => entry.id === item.id ? { ...entry, visited } : entry));
+    try {
+      const response = await fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "toggleVisited", crewId: crew.id, itemId: item.id, visited }) });
+      const data = await response.json() as { item?: PlanItem; error?: string };
+      if (!response.ok || !data.item) throw new Error(data.error || "Could not update Visited status");
+      setPlan((current) => current.map((entry) => entry.id === item.id ? data.item! : entry));
+    } catch (error) {
+      setPlan((current) => current.map((entry) => entry.id === item.id ? item : entry));
+      setCrewError(error instanceof Error ? error.message : "Could not update Visited status");
+    }
   }
 
   function locate() {
@@ -183,7 +244,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       <section className="workspace">
         <header className="topbar">
           <div className="mobile-brand"><div className="logo">26</div><strong>OSH26</strong></div>
-          <button className="crew-switcher" onClick={() => setCrewModal(crewName ? "create" : "create")}><Icon name="crew"/><span><small>YOUR CREW</small><strong>{crewName || "Create or join a Crew"}</strong></span><em>⌄</em></button>
+          <button className="crew-switcher" onClick={() => setCrewModal(crew ? "manage" : "create")}><Icon name="crew"/><span><small>YOUR CREW</small><strong>{crew?.name || "Create or join a Crew"}</strong></span><em>⌄</em></button>
           <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, booths or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
             {filtered.length > 0 && <div className="search-menu">{filtered.map((item) => <button key={item.id} onClick={() => selectExhibitor(item)}><span><strong>{item.name}</strong><small>{item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{item.booths.join(", ")}</b></button>)}</div>}
           </div>
@@ -201,15 +262,15 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             <h2>{selected.name}</h2>
             <div className="chips">{selected.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}</div>
             {selected.description && <p>{selected.description}</p>}
-            <button className={plannedIds.has(selected.id) ? "primary added" : "primary"} onClick={() => addToPlan(selected)}>{plannedIds.has(selected.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button>
+            <button disabled={saving} className={plannedIds.has(selected.id) ? "primary added" : "primary"} onClick={() => addToPlan(selected)}>{plannedIds.has(selected.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button>
           </article>}
         </div>
 
         <div className={`view content-view ${view === "plan" ? "visible" : ""}`}>
           <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Everything your Crew wants to see, in one place.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add places</button></div>
-          {!crewName ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
+          {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
           : plan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors or scheduled events." action="Explore the map" onAction={() => setView("map")} />
-          : <div className="plan-list">{plan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => setPlan((current) => current.map((entry) => entry.id === item.id ? { ...entry, visited: !entry.visited } : entry))} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>{item.kind}</small><h2>{item.title}</h2><p>{item.meta}</p></div><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span></article>)}</div>}
+          : <div className="plan-list">{plan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>{item.kind}</small><h2>{item.title}</h2><p>{item.meta}</p></div><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span></article>)}</div>}
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
@@ -221,7 +282,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
 
       <nav className="bottom-nav">{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item}/><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && plan.length > 0 && <b>{plan.length}</b>}</button>)}</nav>
 
-      {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name="crew"/></div>{crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label><button className="primary" disabled={!draftCrewName.trim()} onClick={createCrew}>Create Crew</button><button className="text-button" onClick={() => setCrewModal("join")}>I have an invite code</button></> : <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label><button className="primary" disabled={joinCode.trim().length < 4} onClick={joinCrew}>Join Crew</button><button className="text-button" onClick={() => setCrewModal("create")}>Create a new Crew instead</button></>}</section></div>}
+      {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name="crew"/></div>{crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || !draftCrewName.trim()} onClick={createCrew}>{saving ? "Creating…" : "Create Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("join"); }}>I have an invite code</button></> : crewModal === "join" ? <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || joinCode.trim().length < 4} onClick={joinCrew}>{saving ? "Joining…" : "Join Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("create"); }}>Create a new Crew instead</button></> : crew ? <><span>INVITE CREW MEMBERS</span><h1>{crew.name}</h1><p>Share this invite code or let a friend scan the QR code.</p>{qrCode && <Image unoptimized className="invite-qr" width={180} height={180} src={qrCode} alt={`QR code to join ${crew.name}`} />}<div className="invite-code"><small>INVITE CODE</small><strong>{crew.inviteCode}</strong></div><button className="primary" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/?join=${crew.inviteCode}`)}>Copy invite link</button></> : null}</section></div>}
 
       {!signedIn && <a className="signin-notice" href="/signin-with-chatgpt?return_to=%2F">Sign in to save and share your Crew →</a>}
     </main>

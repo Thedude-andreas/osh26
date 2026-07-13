@@ -107,6 +107,11 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .crew-modal input { height:44px; padding:0 12px; border:1px solid #cbd7d2; border-radius:11px; outline:0; background:white; color:var(--ink); font-size:14px; }
 .crew-modal input:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(22,124,120,.12); }
 .crew-modal .text-button { width:100%; margin-top:5px; }
+.form-error { margin:-4px 0 12px!important; padding:8px 10px; border-radius:8px; background:#fff0ec; color:#9d3f2d!important; font-weight:800; }
+.invite-qr { display:block; width:180px; height:180px; margin:4px auto 16px; border:8px solid white; border-radius:14px; box-shadow:0 5px 20px rgba(15,45,45,.12); }
+.invite-code { display:grid; gap:4px; margin-bottom:14px; padding:12px; border:1px dashed #9fb6af; border-radius:11px; background:#edf5f1; text-align:center; }
+.invite-code small { color:var(--muted); font-size:8px; font-weight:900; letter-spacing:.15em; }
+.invite-code strong { color:var(--teal); font-size:25px; letter-spacing:.16em; }
 .signin-notice { position:fixed; z-index:60; right:18px; bottom:18px; padding:10px 13px; border-radius:10px; background:#123839; color:white; box-shadow:0 8px 25px rgba(0,0,0,.18); font-size:10px; font-weight:800; text-decoration:none; }
 .bottom-nav { display:none; }
 
