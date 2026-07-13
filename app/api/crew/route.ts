@@ -18,7 +18,8 @@ export async function GET() {
   const membership = memberships[0];
   if (!membership) return Response.json({ crew: null, items: [] });
   const items = await db.select().from(crewItems).where(eq(crewItems.crewId, membership.crew.id)).orderBy(asc(crewItems.createdAt));
-  return Response.json({ crew: { ...membership.crew, role: membership.role }, items });
+  const members = await db.select({ userEmail: crewMembers.userEmail, displayName: crewMembers.displayName }).from(crewMembers).where(eq(crewMembers.crewId, membership.crew.id));
+  return Response.json({ crew: { ...membership.crew, role: membership.role }, items, members });
 }
 
 export async function POST(request: Request) {
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
     const crew = { id: crypto.randomUUID(), name, inviteCode: inviteCode(), createdBy: user.email };
     await db.insert(crews).values(crew);
     await db.insert(crewMembers).values({ crewId: crew.id, userEmail: user.email, displayName: user.displayName, role: "owner" });
-    return Response.json({ crew: { ...crew, role: "owner" }, items: [] }, { status: 201 });
+    return Response.json({ crew: { ...crew, role: "owner" }, items: [], members: [{ userEmail: user.email, displayName: user.displayName }] }, { status: 201 });
   }
   if (payload.action === "join") {
     const code = payload.code?.trim().toUpperCase();
@@ -41,7 +42,8 @@ export async function POST(request: Request) {
     if (!crew) return Response.json({ error: "Invite code not found" }, { status: 404 });
     await db.insert(crewMembers).values({ crewId: crew.id, userEmail: user.email, displayName: user.displayName, role: "member" }).onConflictDoNothing();
     const items = await db.select().from(crewItems).where(eq(crewItems.crewId, crew.id)).orderBy(asc(crewItems.createdAt));
-    return Response.json({ crew: { ...crew, role: "member" }, items });
+    const members = await db.select({ userEmail: crewMembers.userEmail, displayName: crewMembers.displayName }).from(crewMembers).where(eq(crewMembers.crewId, crew.id));
+    return Response.json({ crew: { ...crew, role: "member" }, items, members });
   }
   return Response.json({ error: "Unknown action" }, { status: 400 });
 }

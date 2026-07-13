@@ -21,7 +21,8 @@ type Feature = {
 };
 type Collection = { type: "FeatureCollection"; features: Feature[] };
 type Crew = { id: string; name: string; inviteCode: string; role: "owner" | "member" };
-type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null };
+type CrewMember = { userEmail: string; displayName: string };
+type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null; addedBy: string; createdAt?: string };
 type BoothLocation = { stallId: string; booth: string; center: [number, number]; bounds: [[number, number], [number, number]]; markerIndex: number };
 type ScheduleEvent = { id: string; title: string; category: string; interests: string[]; venue: string; start: string; end: string; localDate: string; localStart: string; localEnd: string; timezone: string; url: string };
 type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kind: "event"; item: ScheduleEvent; score: number };
@@ -124,6 +125,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const highlightedStallsRef = useRef<string[]>([]);
   const highlightedMarkersRef = useRef<HTMLElement[]>([]);
   const highlightExhibitorRef = useRef<(item: Exhibitor, focusBooth?: string) => void>(() => undefined);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRemovalRef = useRef<PlanItem | null>(null);
   const [view, setView] = useState<View>("map");
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
   const [events, setEvents] = useState<ScheduleEvent[]>([]);
@@ -137,6 +140,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [expandedSeriesKey, setExpandedSeriesKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [plan, setPlan] = useState<PlanItem[]>([]);
+  const [crewMembers, setCrewMembers] = useState<CrewMember[]>([]);
+  const [pendingRemoval, setPendingRemoval] = useState<PlanItem | null>(null);
   const [crew, setCrew] = useState<Crew | null>(null);
   const [crewModal, setCrewModal] = useState<"create" | "join" | "manage" | null>(null);
   const [draftCrewName, setDraftCrewName] = useState("");
@@ -192,6 +197,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const visibleResults = searchMatches.slice(0, 50);
   const plannedIds = useMemo(() => new Set(plan.map((item) => item.referenceId)), [plan]);
   const plannedItemByReference = useMemo(() => new Map(plan.map((item) => [item.referenceId, item])), [plan]);
+  const crewMemberNames = useMemo(() => new Map(crewMembers.map((member) => [member.userEmail.toLocaleLowerCase(), member.displayName])), [crewMembers]);
   const crewPlan = useMemo(() => plan.filter((item) => item.kind === "exhibitor"), [plan]);
   const crewCalendarItems = useMemo(() => plan.filter((item) => item.kind === "event"), [plan]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
@@ -218,8 +224,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     if (!signedIn) return;
     fetch("/api/crew").then(async (response) => {
       if (!response.ok) throw new Error("Could not load your Crew");
-      return response.json() as Promise<{ crew: Crew | null; items: PlanItem[] }>;
-    }).then((data) => { setCrew(data.crew); setPlan(data.items); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
+      return response.json() as Promise<{ crew: Crew | null; items: PlanItem[]; members?: CrewMember[] }>;
+    }).then((data) => { setCrew(data.crew); setPlan(data.items); setCrewMembers(data.members || []); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
   }, [signedIn]);
 
   useEffect(() => {
@@ -407,6 +413,10 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     setSeriesExpanded(showSeries);
   }
 
+  function addedByName(item: PlanItem) {
+    return crewMemberNames.get(item.addedBy.toLocaleLowerCase()) || item.addedBy.split("@")[0] || "Crew member";
+  }
+
   useEffect(() => { highlightExhibitorRef.current = highlightExhibitor; });
 
   function closeSelection() {
@@ -448,17 +458,40 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       .finally(() => setSaving(false));
   }
 
-  async function removeCrewItem(item: PlanItem) {
-    if (!crew || saving) return;
-    setSaving(true);
-    setPlan((current) => current.filter((entry) => entry.id !== item.id));
+  async function persistRemoval(item: PlanItem) {
+    if (!crew) return;
     try {
       const response = await fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", crewId: crew.id, itemId: item.id }) });
       if (!response.ok) throw new Error("Could not remove this item");
     } catch (error) {
       setPlan((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
       setCrewError(error instanceof Error ? error.message : "Could not update your Crew");
-    } finally { setSaving(false); }
+    }
+  }
+
+  function removeCrewItem(item: PlanItem) {
+    if (!crew) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    if (pendingRemovalRef.current) void persistRemoval(pendingRemovalRef.current);
+    setPlan((current) => current.filter((entry) => entry.id !== item.id));
+    setPendingRemoval(item);
+    pendingRemovalRef.current = item;
+    undoTimerRef.current = setTimeout(() => {
+      setPendingRemoval(null);
+      pendingRemovalRef.current = null;
+      undoTimerRef.current = null;
+      void persistRemoval(item);
+    }, 6500);
+  }
+
+  function undoRemoval() {
+    const item = pendingRemovalRef.current;
+    if (!item) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setPlan((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
+    setPendingRemoval(null);
+    pendingRemovalRef.current = null;
+    undoTimerRef.current = null;
   }
 
   async function createCrew() {
@@ -468,9 +501,9 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     setSaving(true); setCrewError("");
     try {
       const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", name }) });
-      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; error?: string };
+      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; members?: CrewMember[]; error?: string };
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not create the Crew");
-      setCrew(data.crew); setPlan(data.items || []); setCrewModal("manage"); setDraftCrewName("");
+      setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal("manage"); setDraftCrewName("");
     } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not create the Crew"); }
     finally { setSaving(false); }
   }
@@ -481,9 +514,9 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     setSaving(true); setCrewError("");
     try {
       const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "join", code: joinCode }) });
-      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; error?: string };
+      const data = await response.json() as { crew?: Crew; items?: PlanItem[]; members?: CrewMember[]; error?: string };
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not join the Crew");
-      setCrew(data.crew); setPlan(data.items || []); setCrewModal(null); setJoinCode("");
+      setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal(null); setJoinCode("");
     } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not join the Crew"); }
     finally { setSaving(false); }
   }
@@ -551,7 +584,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Exhibitors and booths your Crew wants to visit.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add exhibitors</button></div>
           {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
           : crewPlan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors your Crew wants to visit." action="Explore the map" onAction={() => setView("map")} />
-          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span><button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
+          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p><p className="added-by">Added by: <strong>{addedByName(item)}</strong></p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span><button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
@@ -566,6 +599,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             <div className="place-kicker">{selectedEvent.category} · {selectedEvent.localStart}–{selectedEvent.localEnd}</div>
             <h2>{selectedEvent.title}</h2>
             <p className="event-venue">{selectedEvent.venue}</p>
+            {plannedItemByReference.get(selectedEvent.id) && <p className="added-by">Added by: <strong>{addedByName(plannedItemByReference.get(selectedEvent.id)!)}</strong></p>}
             {calendarMode === "crew" && selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
             <div className="event-detail-actions"><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
@@ -575,7 +609,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           {calendarMode === "crew" ? <section className="calendar-section crew-schedule">
             <div className="calendar-section-head"><div><small>SHARED CREW CALENDAR</small><h2>{fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</h2></div><b>{crewEventsForDate.length}</b></div>
             {crewEventsForDate.length === 0 ? <div className="calendar-empty"><Icon name="calendar"/><span><strong>No matching Crew events on this day</strong><small>Open All Events to add scheduled activities.</small></span><button onClick={() => setCalendarMode("all")}>Browse events</button></div>
-              : <div className="calendar-time-grid" style={{ height: timeline.height }}>{timeline.hours.map((minute) => <div className="time-rule" key={minute} style={{ top: (minute - timeline.startMinute) * 0.9 }}><time>{String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00</time><span/></div>)}{timeline.placements.map(({ event, start, end, column, columns }) => <article key={event.id} className="timeline-event" style={{ top: (start - timeline.startMinute) * 0.9, height: Math.max(34, (end - start) * 0.9), left: `calc(65px + (100% - 72px) * ${column} / ${columns})`, width: `calc((100% - 72px) / ${columns} - 5px)` }} onClick={() => openEventDetails(event)}><span><time>{event.localStart}–{event.localEnd}</time><strong>{event.title}</strong><small>{event.venue}</small></span><div className="timeline-actions">{(eventSeries.get(seriesKey(event))?.length || 0) > 1 && <button className="repeat-button" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }} aria-label="View all instances"><Icon name="repeat"/></button>}<button className="repeat-button remove" onClick={(click) => { click.stopPropagation(); removeCrewItem(plannedItemByReference.get(event.id)!); }} aria-label="Remove from Crew Calendar"><Icon name="trash"/></button></div></article>)}</div>}
+              : <div className="calendar-time-grid" style={{ height: timeline.height }}>{timeline.hours.map((minute) => <div className="time-rule" key={minute} style={{ top: (minute - timeline.startMinute) * 0.9 }}><time>{String(Math.floor(minute / 60) % 24).padStart(2, "0")}:00</time><span/></div>)}{timeline.placements.map(({ event, start, end, column, columns }) => { const crewItem = plannedItemByReference.get(event.id)!; return <article key={event.id} className="timeline-event" style={{ top: (start - timeline.startMinute) * 0.9, height: Math.max(34, (end - start) * 0.9), left: `calc(65px + (100% - 72px) * ${column} / ${columns})`, width: `calc((100% - 72px) / ${columns} - 5px)` }} onClick={() => openEventDetails(event)}><span><time>{event.localStart}–{event.localEnd}</time><strong>{event.title}</strong><small>{event.venue}</small><em>Added by: {addedByName(crewItem)}</em></span><div className="timeline-actions">{(eventSeries.get(seriesKey(event))?.length || 0) > 1 && <button className="repeat-button" onClick={(click) => { click.stopPropagation(); openEventDetails(event, true); }} aria-label="View all instances"><Icon name="repeat"/></button>}<button className="repeat-button remove" onClick={(click) => { click.stopPropagation(); removeCrewItem(crewItem); }} aria-label="Remove from Crew Calendar"><Icon name="trash"/></button></div></article>; })}</div>}
           </section> : <section className="calendar-section official-schedule">
             <div className="calendar-section-head"><div><small>AIRVENTURE 2026</small><h2>All scheduled events</h2></div><b>{scheduleForDate.length}</b></div>
             <p className="schedule-count">Chronological schedule for {fullDay[0] + fullDay.slice(1).toLowerCase()}, July {activeDate.date}</p>
@@ -587,6 +621,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       <nav className="bottom-nav">{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item}/><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
 
       {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name="crew"/></div>{crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || !draftCrewName.trim()} onClick={createCrew}>{saving ? "Creating…" : "Create Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("join"); }}>I have an invite code</button></> : crewModal === "join" ? <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || joinCode.trim().length < 4} onClick={joinCrew}>{saving ? "Joining…" : "Join Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("create"); }}>Create a new Crew instead</button></> : crew ? <><span>INVITE CREW MEMBERS</span><h1>{crew.name}</h1><p>Share this invite code or let a friend scan the QR code.</p>{qrCode && <Image unoptimized className="invite-qr" width={180} height={180} src={qrCode} alt={`QR code to join ${crew.name}`} />}<div className="invite-code"><small>INVITE CODE</small><strong>{crew.inviteCode}</strong></div><button className="primary" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/?join=${crew.inviteCode}`)}>Copy invite link</button></> : null}</section></div>}
+
+      {pendingRemoval && <aside className="undo-toast" role="status"><span><strong>Removed from {pendingRemoval.kind === "event" ? "Crew Calendar" : "Crew Plan"}</strong><small>{pendingRemoval.title}</small></span><button onClick={undoRemoval}>Undo</button></aside>}
 
       {!signedIn && <a className="signin-notice" href="/signin-with-chatgpt?return_to=%2F">Sign in to save and share your Crew →</a>}
     </main>
