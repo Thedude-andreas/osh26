@@ -28,6 +28,7 @@ type ScheduleEvent = { id: string; title: string; category: string; interests: s
 type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kind: "event"; item: ScheduleEvent; score: number };
 type VenueRegistryEntry = { name: string; eventCount: number; status: "matched" | "unmatched"; source: string | null; sourceName?: string; coordinates: [number, number] | null; booths?: string[] };
 type VenuePlacement = { venueName: string; longitude: number; latitude: number; placedBy: string; updatedAt: string };
+type VenueReport = { id: string; venueName: string; currentLongitude: number; currentLatitude: number; proposedLongitude: number; proposedLatitude: number; note: string; status: "pending" | "approved" | "rejected"; reportedBy: string; createdAt: string };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
@@ -119,7 +120,7 @@ function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" 
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
-export default function Osh26App({ userName, signedIn }: { userName: string; signedIn: boolean }) {
+export default function Osh26App({ userName, signedIn, isAdmin }: { userName: string; signedIn: boolean; isAdmin: boolean }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
@@ -139,8 +140,13 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   const [venueRegistry, setVenueRegistry] = useState<VenueRegistryEntry[]>([]);
   const [manualVenuePlacements, setManualVenuePlacements] = useState<VenuePlacement[]>([]);
   const [placementMode, setPlacementMode] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
   const [selectedVenueName, setSelectedVenueName] = useState("");
   const [placementDraft, setPlacementDraft] = useState<[number, number] | null>(null);
+  const [venueReports, setVenueReports] = useState<VenueReport[]>([]);
+  const [selectedReportId, setSelectedReportId] = useState("");
+  const [reportNote, setReportNote] = useState("");
+  const [venueNotice, setVenueNotice] = useState("");
   const [mapVenueName, setMapVenueName] = useState("");
   const [venueSaving, setVenueSaving] = useState(false);
   const [venueError, setVenueError] = useState("");
@@ -239,8 +245,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     return manual ? { ...venue, status: "matched" as const, source: "manual", coordinates: [manual.longitude, manual.latitude] as [number, number] } : venue;
   }), [manualVenueByName, venueRegistry]);
   const venueByName = useMemo(() => new Map(effectiveVenues.map((venue) => [venue.name, venue])), [effectiveVenues]);
-  const unmatchedVenues = useMemo(() => effectiveVenues.filter((venue) => !venue.coordinates), [effectiveVenues]);
   const selectedVenue = venueByName.get(selectedVenueName) || null;
+  const selectedReport = venueReports.find((report) => report.id === selectedReportId) || null;
 
   useEffect(() => {
     if (!signedIn) return;
@@ -253,6 +259,13 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
   useEffect(() => {
     fetch("/data/events.json").then((response) => response.json()).then((data: { events: ScheduleEvent[] }) => setEvents(data.events)).catch(() => setEvents([]));
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch("/api/venue-reports").then((response) => response.ok ? response.json() : { reports: [] })
+      .then((data: { reports: VenueReport[] }) => setVenueReports(data.reports))
+      .catch(() => setVenueReports([]));
+  }, [isAdmin]);
 
   useEffect(() => {
     Promise.all([
@@ -426,10 +439,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
       element.append(dot, label);
       element.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (placementModeRef.current) {
-          setSelectedVenueName(venue.name);
-          setPlacementDraft(venue.coordinates);
-        } else setMapVenueName(venue.name);
+        if (placementModeRef.current) return;
+        setMapVenueName(venue.name);
         map.flyTo({ center: venue.coordinates!, zoom: Math.max(map.getZoom(), 17.4), duration: 600 });
       });
       return new maplibregl.Marker({ element, anchor: "center" }).setLngLat(venue.coordinates!).addTo(map);
@@ -444,11 +455,11 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     const map = mapRef.current;
     placementDraftMarkerRef.current?.remove();
     placementDraftMarkerRef.current = null;
-    if (!map || !placementMode || !placementDraft) return;
+    if (!map || (!placementMode && !reviewMode) || !placementDraft) return;
     const element = document.createElement("div");
     element.className = "placement-draft-marker";
     placementDraftMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(placementDraft).addTo(map);
-  }, [placementDraft, placementMode]);
+  }, [placementDraft, placementMode, reviewMode]);
 
   function clearHighlight() {
     const map = mapRef.current;
@@ -632,36 +643,83 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     navigator.geolocation?.getCurrentPosition(({ coords }) => mapRef.current?.flyTo({ center: [coords.longitude, coords.latitude], zoom: 18, duration: 700 }));
   }
 
-  function chooseVenueForPlacement(name: string) {
+  function startVenueReport(name: string) {
     const venue = venueByName.get(name);
     const map = mapRef.current;
+    if (!venue?.coordinates) return;
+    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    setView("map");
+    setSelectedEvent(null);
     setSelectedVenueName(name);
-    setPlacementDraft(venue?.coordinates || null);
+    setPlacementDraft(null);
+    setReportNote("");
     setVenueError("");
-    if (venue?.coordinates && map) map.flyTo({ center: venue.coordinates, zoom: Math.max(map.getZoom(), 17.4), duration: 600 });
-  }
-
-  function startVenuePlacement() {
-    const venue = unmatchedVenues[0] || effectiveVenues[0];
     setPlacementMode(true);
+    setReviewMode(false);
     setMapVenueName("");
     clearHighlight();
     setSelected(null);
-    if (venue) chooseVenueForPlacement(venue.name);
+    if (map) map.flyTo({ center: venue.coordinates, zoom: Math.max(map.getZoom(), 18), duration: 600 });
   }
 
-  async function saveVenuePlacement() {
-    if (!selectedVenueName || !placementDraft) return;
-    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+  async function submitVenueReport() {
+    if (!selectedVenue?.coordinates || !placementDraft) return;
     setVenueSaving(true); setVenueError("");
     try {
-      const response = await fetch("/api/venues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ venueName: selectedVenueName, longitude: placementDraft[0], latitude: placementDraft[1] }) });
-      const data = await response.json() as { placement?: VenuePlacement; error?: string };
-      if (!response.ok || !data.placement) throw new Error(data.error || "Could not save this venue");
-      setManualVenuePlacements((current) => [...current.filter((placement) => placement.venueName !== selectedVenueName), data.placement!]);
-      const next = unmatchedVenues.find((venue) => venue.name !== selectedVenueName);
-      if (next) { setSelectedVenueName(next.name); setPlacementDraft(null); }
-    } catch (error) { setVenueError(error instanceof Error ? error.message : "Could not save this venue"); }
+      const response = await fetch("/api/venue-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        action: "submit",
+        venueName: selectedVenue.name,
+        currentLongitude: selectedVenue.coordinates[0],
+        currentLatitude: selectedVenue.coordinates[1],
+        proposedLongitude: placementDraft[0],
+        proposedLatitude: placementDraft[1],
+        note: reportNote,
+      }) });
+      const data = await response.json() as { report?: VenueReport; error?: string };
+      if (!response.ok || !data.report) throw new Error(data.error || "Could not submit the location report");
+      if (isAdmin) setVenueReports((current) => [...current, data.report!]);
+      setPlacementMode(false);
+      setPlacementDraft(null);
+      setMapVenueName(selectedVenue.name);
+      setVenueNotice("Location report sent for admin review.");
+    } catch (error) { setVenueError(error instanceof Error ? error.message : "Could not submit the location report"); }
+    finally { setVenueSaving(false); }
+  }
+
+  function previewVenueReport(report: VenueReport) {
+    setSelectedReportId(report.id);
+    setSelectedVenueName(report.venueName);
+    setPlacementDraft([report.proposedLongitude, report.proposedLatitude]);
+    setMapVenueName("");
+    setVenueError("");
+    mapRef.current?.flyTo({ center: [report.proposedLongitude, report.proposedLatitude], zoom: 18.3, duration: 600 });
+  }
+
+  function startReportReview() {
+    setView("map");
+    setPlacementMode(false);
+    setReviewMode(true);
+    setMapVenueName("");
+    setSelected(null);
+    setVenueNotice("");
+    if (venueReports[0]) previewVenueReport(venueReports[0]);
+    else { setSelectedReportId(""); setSelectedVenueName(""); setPlacementDraft(null); }
+  }
+
+  async function reviewVenueReport(action: "approve" | "reject") {
+    if (!selectedReport) return;
+    setVenueSaving(true); setVenueError("");
+    try {
+      const response = await fetch("/api/venue-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, id: selectedReport.id }) });
+      const data = await response.json() as { placement?: VenuePlacement | null; error?: string };
+      if (!response.ok) throw new Error(data.error || "Could not review this report");
+      if (data.placement) setManualVenuePlacements((current) => [...current.filter((placement) => placement.venueName !== data.placement!.venueName), data.placement!]);
+      const remaining = venueReports.filter((report) => report.id !== selectedReport.id);
+      setVenueReports(remaining);
+      if (remaining[0]) previewVenueReport(remaining[0]);
+      else { setSelectedReportId(""); setSelectedVenueName(""); setPlacementDraft(null); }
+      setVenueNotice(action === "approve" ? "New location approved and published on the map." : "Location report rejected.");
+    } catch (error) { setVenueError(error instanceof Error ? error.message : "Could not review this report"); }
     finally { setVenueSaving(false); }
   }
 
@@ -670,6 +728,8 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
     if (!venue?.coordinates) return;
     setView("map");
     setSelectedEvent(null);
+    setReviewMode(false);
+    setPlacementMode(false);
     setMapVenueName(name);
     mapRef.current?.flyTo({ center: venue.coordinates, zoom: 18.2, duration: 700 });
   }
@@ -702,10 +762,33 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
           <div ref={mapContainer} className="map" />
           {!mapReady && <div className="map-loading"><span/><strong>Preparing the AirVenture map…</strong></div>}
           <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors, event venues and build a shared plan.</p></div>
-          {!placementMode && <button className="venue-editor-toggle" onClick={startVenuePlacement}>Place venues <b>{effectiveVenues.length - unmatchedVenues.length}/{effectiveVenues.length}</b></button>}
-          {!placementMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
-          {placementMode && <aside className="venue-editor"><button className="close-card" onClick={() => { setPlacementMode(false); setPlacementDraft(null); }} aria-label="Close venue editor"><Icon name="close"/></button><small>VENUE PLACEMENT</small><h2>{effectiveVenues.length - unmatchedVenues.length} of {effectiveVenues.length} mapped</h2><p>Select a venue, then tap its exact position on the map. Existing automatic matches can also be corrected.</p><label>Event venue<select value={selectedVenueName} onChange={(event) => chooseVenueForPlacement(event.target.value)}>{[...effectiveVenues].sort((a, b) => Number(Boolean(a.coordinates)) - Number(Boolean(b.coordinates)) || a.name.localeCompare(b.name)).map((venue) => <option key={venue.name} value={venue.name}>{venue.coordinates ? "✓ " : "○ "}{venue.name} ({venue.eventCount})</option>)}</select></label>{selectedVenue && <div className="venue-match-status"><strong>{selectedVenue.coordinates ? `Current source: ${selectedVenue.source === "openstreetmap" ? "OpenStreetMap" : selectedVenue.source === "booth-map" ? "booth map" : selectedVenue.source === "visitor-map" ? "Official Visitors Map" : "manual"}` : "Not mapped yet"}</strong><small>{selectedVenue.sourceName || selectedVenue.booths?.join(", ") || "Tap the map to place it"}</small></div>}{placementDraft && <code>{placementDraft[1].toFixed(6)}, {placementDraft[0].toFixed(6)}</code>}{venueError && <p className="form-error">{venueError}</p>}<button className="primary" disabled={!placementDraft || venueSaving} onClick={saveVenuePlacement}>{venueSaving ? "Saving…" : selectedVenue?.coordinates ? "Save corrected position" : "Save position & next"}</button><small className="placement-help">Purple markers are mapped venues. The yellow target is your pending position.</small></aside>}
-          {selected && !mapVenueName && !placementMode && <article className="place-card">
+          {isAdmin && !placementMode && !reviewMode && <button className="venue-editor-toggle" onClick={startReportReview}>Review location reports <b>{venueReports.length}</b></button>}
+          {!placementMode && !reviewMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
+          {venueNotice && !placementMode && <aside className="venue-report-toast" role="status">{venueNotice}<button onClick={() => setVenueNotice("")} aria-label="Dismiss"><Icon name="close"/></button></aside>}
+          {placementMode && selectedVenue?.coordinates && <aside className="venue-editor">
+            <button className="close-card" onClick={() => { setPlacementMode(false); setPlacementDraft(null); }} aria-label="Close location report"><Icon name="close"/></button>
+            <small>LOCATION REPORT</small><h2>Report incorrect location</h2>
+            <p><strong>{selectedVenue.name}</strong> is marked by the purple dot. Tap the correct position on the map to place the yellow target.</p>
+            {placementDraft && <code>{placementDraft[1].toFixed(6)}, {placementDraft[0].toFixed(6)}</code>}
+            <label>Comment (optional)<textarea value={reportNote} onChange={(event) => setReportNote(event.target.value)} maxLength={500} placeholder="Add a landmark or explain what is wrong" /></label>
+            {venueError && <p className="form-error">{venueError}</p>}
+            <button className="primary" disabled={!placementDraft || venueSaving} onClick={submitVenueReport}>{venueSaving ? "Sending…" : "Send for admin review"}</button>
+            <small className="placement-help">The map will not change until an administrator approves the report.</small>
+          </aside>}
+          {reviewMode && <aside className="venue-editor venue-review-editor">
+            <button className="close-card" onClick={() => { setReviewMode(false); setPlacementDraft(null); setSelectedReportId(""); }} aria-label="Close report review"><Icon name="close"/></button>
+            <small>ADMIN REVIEW</small><h2>{venueReports.length} pending report{venueReports.length === 1 ? "" : "s"}</h2>
+            {selectedReport ? <>
+              <label>Report<select value={selectedReport.id} onChange={(event) => { const report = venueReports.find((item) => item.id === event.target.value); if (report) previewVenueReport(report); }}>{venueReports.map((report) => <option key={report.id} value={report.id}>{report.venueName}</option>)}</select></label>
+              <div className="venue-match-status"><strong>{selectedReport.venueName}</strong><small>Reported by {selectedReport.reportedBy}</small></div>
+              {selectedReport.note && <p className="report-note">“{selectedReport.note}”</p>}
+              <div className="coordinate-compare"><span><small>CURRENT</small><code>{selectedReport.currentLatitude.toFixed(6)}, {selectedReport.currentLongitude.toFixed(6)}</code></span><span><small>PROPOSED</small><code>{selectedReport.proposedLatitude.toFixed(6)}, {selectedReport.proposedLongitude.toFixed(6)}</code></span></div>
+              {venueError && <p className="form-error">{venueError}</p>}
+              <div className="review-actions"><button disabled={venueSaving} className="review-reject" onClick={() => reviewVenueReport("reject")}>Reject</button><button disabled={venueSaving} className="primary" onClick={() => reviewVenueReport("approve")}>{venueSaving ? "Saving…" : "Approve new location"}</button></div>
+              <small className="placement-help">Purple is the current location. Yellow is the reported location.</small>
+            </> : <p>No location reports are waiting for review.</p>}
+          </aside>}
+          {selected && !mapVenueName && !placementMode && !reviewMode && <article className="place-card">
             <button className="close-card" onClick={closeSelection} aria-label="Close"><Icon name="close"/></button>
             <div className="place-kicker">EXHIBITOR · BOOTH {selected.booths.join(", ")}</div>
             <h2>{selected.name}</h2>
@@ -714,7 +797,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             {selected.description && <p>{selected.description}</p>}
             <button disabled={saving} className={plannedIds.has(selected.id) ? "primary added" : "primary"} onClick={() => addToPlan(selected)}>{plannedIds.has(selected.id) ? <><Icon name="check"/> Added to Crew Plan</> : "+ Add to Crew Plan"}</button>
           </article>}
-          {mapVenueName && !placementMode && venueByName.get(mapVenueName)?.coordinates && <article className="place-card venue-map-card"><button className="close-card" onClick={() => setMapVenueName("")} aria-label="Close"><Icon name="close"/></button><div className="place-kicker">EVENT VENUE · {venueByName.get(mapVenueName)?.eventCount} EVENTS</div><h2>{mapVenueName}</h2><p>Mapped from {venueByName.get(mapVenueName)?.source === "openstreetmap" ? "OpenStreetMap" : venueByName.get(mapVenueName)?.source === "booth-map" ? "the exhibitor booth map" : venueByName.get(mapVenueName)?.source === "visitor-map" ? "the Official Visitors Map" : "a manual placement"}.</p></article>}
+          {mapVenueName && !placementMode && !reviewMode && venueByName.get(mapVenueName)?.coordinates && <article className="place-card venue-map-card"><button className="close-card" onClick={() => setMapVenueName("")} aria-label="Close"><Icon name="close"/></button><div className="place-kicker">EVENT VENUE · {venueByName.get(mapVenueName)?.eventCount} EVENTS</div><h2>{mapVenueName}</h2><p>Mapped from {venueByName.get(mapVenueName)?.source === "openstreetmap" ? "OpenStreetMap" : venueByName.get(mapVenueName)?.source === "booth-map" ? "the exhibitor booth map" : venueByName.get(mapVenueName)?.source === "visitor-map" ? "the Official Visitors Map" : "a manual placement"}.</p><button className="report-location" onClick={() => startVenueReport(mapVenueName)}>Report incorrect location</button></article>}
         </div>
 
         <div className={`view content-view ${view === "plan" ? "visible" : ""}`}>
@@ -739,7 +822,7 @@ export default function Osh26App({ userName, signedIn }: { userName: string; sig
             {plannedItemByReference.get(selectedEvent.id) && <p className="added-by">Added by: <strong>{addedByName(plannedItemByReference.get(selectedEvent.id)!)}</strong></p>}
             {calendarMode === "crew" && selectedSeries.length > 1 && <button className="recurrence-summary" onClick={() => setSeriesExpanded((expanded) => !expanded)}><Icon name="repeat"/><span><strong>Recurring event</strong><small>{selectedSeries.length} scheduled instances</small></span><b>{seriesExpanded ? "Hide" : "View all"}</b></button>}
             <div className="chips">{selectedEvent.interests.map((interest) => <span key={interest}>{interest}</span>)}</div>
-            <div className="event-detail-actions"><div><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{venueByName.get(selectedEvent.venue)?.coordinates && <button className="show-on-map" onClick={() => showVenueOnMap(selectedEvent.venue)}><Icon name="location"/> Show on map</button>}</div>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
+            <div className="event-detail-actions"><div><a href={selectedEvent.url} target="_blank" rel="noreferrer">Official listing ↗</a>{venueByName.get(selectedEvent.venue)?.coordinates && <><button className="show-on-map" onClick={() => showVenueOnMap(selectedEvent.venue)}><Icon name="location"/> Show on map</button><button className="report-location" onClick={() => startVenueReport(selectedEvent.venue)}>Report incorrect location</button></>}</div>{plannedItemByReference.has(selectedEvent.id) ? <button disabled={saving} className="primary remove-primary" onClick={() => removeCrewItem(plannedItemByReference.get(selectedEvent.id)!)}><Icon name="trash"/> Remove from Crew Calendar</button> : <button disabled={saving} className="primary" onClick={() => addEventToCalendar(selectedEvent)}>+ Add to Crew Calendar</button>}</div>
             {calendarMode === "crew" && seriesExpanded && selectedSeries.length > 1 && <div className="series-instances"><div><strong>All instances</strong><small>Select a date and time to view or add that specific instance.</small></div>{selectedSeries.map((instance) => <button key={instance.id} className={instance.id === selectedEvent.id ? "active" : ""} onClick={() => { setSelectedEvent(instance); setSelectedDate(instance.localDate); }}><span><strong>{formatShortDate(instance.localDate)}</strong><small>{instance.localStart}–{instance.localEnd}</small></span><em>{instance.venue}</em><b>{plannedIds.has(instance.id) ? "✓ Added" : "View"}</b></button>)}</div>}
           </article>}
 

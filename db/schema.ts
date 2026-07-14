@@ -45,3 +45,21 @@ export const venuePlacements = sqliteTable("venue_placements", {
   placedBy: text("placed_by").notNull(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const venueLocationReports = sqliteTable("venue_location_reports", {
+  id: text("id").primaryKey(),
+  venueName: text("venue_name").notNull(),
+  currentLongitude: real("current_longitude").notNull(),
+  currentLatitude: real("current_latitude").notNull(),
+  proposedLongitude: real("proposed_longitude").notNull(),
+  proposedLatitude: real("proposed_latitude").notNull(),
+  note: text("note").notNull().default(""),
+  status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull().default("pending"),
+  reportedBy: text("reported_by").notNull(),
+  reviewedBy: text("reviewed_by"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  reviewedAt: text("reviewed_at"),
+}, (table) => [
+  index("venue_location_reports_status_idx").on(table.status),
+  index("venue_location_reports_venue_idx").on(table.venueName),
+]);
