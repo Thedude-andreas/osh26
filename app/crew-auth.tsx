@@ -100,11 +100,10 @@ export function CrewAuth() {
     setStatus("loading");
     setMessage(null);
 
-    const { data: crew, error: crewError } = await supabase
+    const crewId = crypto.randomUUID();
+    const { error: crewError } = await supabase
       .from("crews")
-      .insert({ name: crewName.trim(), created_by: session.user.id })
-      .select("id")
-      .single();
+      .insert({ id: crewId, name: crewName.trim(), created_by: session.user.id });
     if (crewError) {
       setStatus("error");
       setMessage(crewError.message);
@@ -112,7 +111,7 @@ export function CrewAuth() {
     }
 
     const { error: memberError } = await supabase.from("crew_members").insert({
-      crew_id: crew.id,
+      crew_id: crewId,
       user_id: session.user.id,
       role: "owner",
       display_name: session.user.email?.split("@")[0] ?? "Crew",
