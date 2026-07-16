@@ -16,6 +16,13 @@ export SITES_PROJECT_ROOT="${project_root}"
 export HOME="${runtime_root}/home"
 export XDG_CONFIG_HOME="${runtime_root}/xdg-config"
 export TMPDIR="${runtime_root}/tmp"
+
+for gnubin in /opt/homebrew/opt/coreutils/libexec/gnubin /usr/local/opt/coreutils/libexec/gnubin; do
+  if [[ -d "${gnubin}" ]]; then
+    export PATH="${gnubin}:${PATH}"
+  fi
+done
+
 export WRANGLER_WRITE_LOGS=false
 export WRANGLER_LOG_PATH="${runtime_root}/wrangler/logs"
 export MINIFLARE_REGISTRY_PATH="${runtime_root}/wrangler/registry"
