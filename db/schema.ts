@@ -63,3 +63,32 @@ export const venueLocationReports = sqliteTable("venue_location_reports", {
   index("venue_location_reports_status_idx").on(table.status),
   index("venue_location_reports_venue_idx").on(table.venueName),
 ]);
+
+export const locationPreferences = sqliteTable("location_preferences", {
+  userEmail: text("user_email").primaryKey(),
+  mode: text("mode", { enum: ["off", "request", "tracking"] }).notNull().default("off"),
+  basemap: text("basemap", { enum: ["osm", "ortho"] }).notNull().default("osm"),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const locationRequests = sqliteTable("location_requests", {
+  id: text("id").primaryKey(),
+  crewId: text("crew_id").notNull().references(() => crews.id, { onDelete: "cascade" }),
+  requestedBy: text("requested_by").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("location_requests_crew_time_idx").on(table.crewId, table.createdAt)]);
+
+export const locationSamples = sqliteTable("location_samples", {
+  id: text("id").primaryKey(),
+  crewId: text("crew_id").notNull().references(() => crews.id, { onDelete: "cascade" }),
+  userEmail: text("user_email").notNull(),
+  kind: text("kind", { enum: ["request", "tracking"] }).notNull(),
+  requestId: text("request_id"),
+  longitude: real("longitude").notNull(),
+  latitude: real("latitude").notNull(),
+  accuracy: real("accuracy").notNull(),
+  capturedAt: text("captured_at").notNull(),
+}, (table) => [
+  index("location_samples_crew_time_idx").on(table.crewId, table.capturedAt),
+  index("location_samples_user_time_idx").on(table.userEmail, table.capturedAt),
+]);

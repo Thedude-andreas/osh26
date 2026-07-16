@@ -5,7 +5,9 @@ import Image from "next/image";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import QRCode from "qrcode";
 
-type View = "map" | "plan" | "calendar";
+type View = "map" | "plan" | "calendar" | "settings";
+type LocationMode = "off" | "request" | "tracking";
+type Basemap = "osm" | "ortho";
 type Exhibitor = {
   id: string;
   name: string;
@@ -29,6 +31,8 @@ type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kin
 type VenueRegistryEntry = { name: string; eventCount: number; status: "matched" | "unmatched"; source: string | null; sourceName?: string; coordinates: [number, number] | null; booths?: string[] };
 type VenuePlacement = { venueName: string; longitude: number; latitude: number; placedBy: string; updatedAt: string };
 type VenueReport = { id: string; venueName: string; currentLongitude: number; currentLatitude: number; proposedLongitude: number; proposedLatitude: number; note: string; status: "pending" | "approved" | "rejected"; reportedBy: string; createdAt: string };
+type CrewLocationRequest = { id: string; crewId: string; requestedBy: string; requestedByName: string; createdAt: string };
+type CrewLocationSample = { id: string; crewId: string; userEmail: string; displayName: string; kind: "request" | "tracking"; requestId: string | null; longitude: number; latitude: number; accuracy: number; capturedAt: string };
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
@@ -104,7 +108,7 @@ function stringArray(value: unknown): string[] {
   catch { return [value]; }
 }
 
-function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" | "trash" }) {
+function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" | "trash" | "settings" }) {
   const paths = {
     map: <><path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2Z"/><path d="M8 4v13M16 7v13"/></>,
     plan: <><path d="M9 5h11M9 12h11M9 19h11"/><path d="m3 5 1 1 2-2M3 12l1 1 2-2M3 19l1 1 2-2"/></>,
@@ -116,6 +120,7 @@ function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" 
     check: <path d="m5 12 4 4L19 6"/>,
     repeat: <><path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></>,
     trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6"/><path d="M10 11v6M14 11v6"/></>,
+    settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.18.36.48.7.82.9.34.2.72.3 1.1.3H21v4h-.1a1.7 1.7 0 0 0-1.5.8Z"/></>,
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -125,6 +130,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const venueMarkersRef = useRef<Marker[]>([]);
+  const crewLocationMarkersRef = useRef<Marker[]>([]);
   const placementDraftMarkerRef = useRef<Marker | null>(null);
   const locationsByExhibitorRef = useRef<Map<string, BoothLocation[]>>(new Map());
   const highlightedStallsRef = useRef<string[]>([]);
@@ -133,6 +139,10 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRemovalRef = useRef<PlanItem | null>(null);
   const placementModeRef = useRef(false);
+  const locationModeRef = useRef<LocationMode>("off");
+  const lastAnsweredRequestRef = useRef("");
+  const trackingWatchRef = useRef<number | null>(null);
+  const lastTrackingSentAtRef = useRef(0);
   const selectedVenueRef = useRef("");
   const [view, setView] = useState<View>("map");
   const [exhibitors, setExhibitors] = useState<Exhibitor[]>([]);
@@ -150,6 +160,13 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const [mapVenueName, setMapVenueName] = useState("");
   const [venueSaving, setVenueSaving] = useState(false);
   const [venueError, setVenueError] = useState("");
+  const [locationMode, setLocationMode] = useState<LocationMode>("off");
+  const [basemap, setBasemap] = useState<Basemap>("osm");
+  const [crewLocationSamples, setCrewLocationSamples] = useState<CrewLocationSample[]>([]);
+  const [crewLocationRequest, setCrewLocationRequest] = useState<CrewLocationRequest | null>(null);
+  const [locationSaving, setLocationSaving] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const [locationNotice, setLocationNotice] = useState("");
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
   const [selectedDate, setSelectedDate] = useState("2026-07-20");
@@ -248,6 +265,14 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const venueByName = useMemo(() => new Map(effectiveVenues.map((venue) => [venue.name, venue])), [effectiveVenues]);
   const selectedVenue = venueByName.get(selectedVenueName) || null;
   const selectedReport = venueReports.find((report) => report.id === selectedReportId) || null;
+  const latestCrewLocations = useMemo(() => {
+    const latest = new Map<string, CrewLocationSample>();
+    crewLocationSamples.forEach((sample) => {
+      const current = latest.get(sample.userEmail);
+      if (!current || current.capturedAt < sample.capturedAt) latest.set(sample.userEmail, sample);
+    });
+    return Array.from(latest.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [crewLocationSamples]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -276,7 +301,38 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   }, []);
 
   useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+  useEffect(() => { locationModeRef.current = locationMode; }, [locationMode]);
   useEffect(() => { selectedVenueRef.current = selectedVenueName; }, [selectedVenueName]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("osh26-basemap");
+    if (stored === "osm" || stored === "ortho") queueMicrotask(() => setBasemap(stored));
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    void loadLocationState();
+    const timer = window.setInterval(() => { void loadLocationState(); }, 10_000);
+    return () => window.clearInterval(timer);
+    // loadLocationState intentionally reads the latest mode through a ref while polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn, crew?.id]);
+
+  useEffect(() => {
+    if (!signedIn || !crew || locationMode !== "tracking" || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition((position) => {
+      if (Date.now() - lastTrackingSentAtRef.current < 15_000) return;
+      lastTrackingSentAtRef.current = Date.now();
+      void publishPosition(position);
+    }, (error) => setLocationError(error.message || "Location permission is required for tracking"), {
+      enableHighAccuracy: true, maximumAge: 10_000, timeout: 20_000,
+    });
+    trackingWatchRef.current = watchId;
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+      trackingWatchRef.current = null;
+    };
+  }, [crew, locationMode, signedIn]);
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("join");
@@ -304,8 +360,14 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
       attributionControl: false,
       style: {
         version: 8,
-        sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors" } },
-        layers: [{ id: "osm", type: "raster", source: "osm", paint: { "raster-saturation": -0.65, "raster-contrast": -0.08, "raster-brightness-max": 0.96 } }],
+        sources: {
+          osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap contributors" },
+          ortho: { type: "raster", tiles: ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Tiles © Esri" },
+        },
+        layers: [
+          { id: "base-osm", type: "raster", source: "osm", paint: { "raster-saturation": -0.65, "raster-contrast": -0.08, "raster-brightness-max": 0.96 } },
+          { id: "base-ortho", type: "raster", source: "ortho", layout: { visibility: "none" } },
+        ],
       },
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
@@ -341,6 +403,11 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
           "line-opacity": ["case", ["boolean", ["feature-state", "highlighted"], false], 1, 0],
           "line-width": 3.8,
         },
+      });
+      map.addSource("crew-tracks", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "crew-tracks", type: "line", source: "crew-tracks", layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-width": 4, "line-opacity": 0.82 },
       });
 
       const stallsById = new Map(stalls.features.map((stall) => [String(stall.id), stall]));
@@ -423,8 +490,49 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
       setMapReady(true);
     });
     mapRef.current = map;
-    return () => { markersRef.current.forEach((marker) => marker.remove()); venueMarkersRef.current.forEach((marker) => marker.remove()); placementDraftMarkerRef.current?.remove(); map.remove(); mapRef.current = null; };
+    return () => { markersRef.current.forEach((marker) => marker.remove()); venueMarkersRef.current.forEach((marker) => marker.remove()); crewLocationMarkersRef.current.forEach((marker) => marker.remove()); placementDraftMarkerRef.current?.remove(); map.remove(); mapRef.current = null; };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map.getLayer("base-osm") || !map.getLayer("base-ortho")) return;
+    map.setLayoutProperty("base-osm", "visibility", basemap === "osm" ? "visible" : "none");
+    map.setLayoutProperty("base-ortho", "visibility", basemap === "ortho" ? "visible" : "none");
+  }, [basemap, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    crewLocationMarkersRef.current.forEach((marker) => marker.remove());
+    crewLocationMarkersRef.current = [];
+    const byMember = new Map<string, CrewLocationSample[]>();
+    crewLocationSamples.forEach((sample) => byMember.set(sample.userEmail, [...(byMember.get(sample.userEmail) || []), sample]));
+    const colors = ["#65408e", "#167c78", "#c64b34", "#2f65a7", "#9a6c1e", "#b33b76"];
+    const trackFeatures: Array<Record<string, unknown>> = [];
+    Array.from(byMember.entries()).forEach(([email, samples], memberIndex) => {
+      const color = colors[memberIndex % colors.length];
+      const ordered = [...samples].sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
+      const tracking = ordered.filter((sample) => sample.kind === "tracking");
+      if (tracking.length > 1) trackFeatures.push({
+        type: "Feature", properties: { color, email },
+        geometry: { type: "LineString", coordinates: tracking.map((sample) => [sample.longitude, sample.latitude]) },
+      });
+      const latest = ordered[ordered.length - 1];
+      const element = document.createElement("button");
+      element.className = "crew-location-marker";
+      element.style.setProperty("--member-color", color);
+      const dot = document.createElement("i");
+      const label = document.createElement("span");
+      label.textContent = latest.displayName;
+      element.append(dot, label);
+      element.title = `${latest.displayName} · ${new Date(latest.capturedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      element.addEventListener("click", () => map.flyTo({ center: [latest.longitude, latest.latitude], zoom: Math.max(map.getZoom(), 18), duration: 500 }));
+      crewLocationMarkersRef.current.push(new maplibregl.Marker({ element, anchor: "center" }).setLngLat([latest.longitude, latest.latitude]).addTo(map));
+    });
+    const source = map.getSource("crew-tracks") as maplibregl.GeoJSONSource | undefined;
+    source?.setData({ type: "FeatureCollection", features: trackFeatures } as never);
+    return () => { crewLocationMarkersRef.current.forEach((marker) => marker.remove()); crewLocationMarkersRef.current = []; };
+  }, [crewLocationSamples, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -652,6 +760,85 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     }
   }
 
+  async function loadLocationState() {
+    try {
+      const response = await fetch("/api/location", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json() as { settings: { mode: LocationMode; basemap: Basemap }; request: CrewLocationRequest | null; samples: CrewLocationSample[] };
+      setLocationMode(data.settings.mode);
+      setBasemap(data.settings.basemap);
+      window.localStorage.setItem("osh26-basemap", data.settings.basemap);
+      setCrewLocationRequest(data.request);
+      setCrewLocationSamples(data.samples);
+      if (data.request && data.request.id !== lastAnsweredRequestRef.current && (data.settings.mode === "request" || data.settings.mode === "tracking")) {
+        lastAnsweredRequestRef.current = data.request.id;
+        void publishCurrentPosition(data.request.id);
+      }
+    } catch {
+      // Polling is best effort; keep the last successfully loaded Crew positions.
+    }
+  }
+
+  async function publishPosition(position: GeolocationPosition, requestId?: string) {
+    try {
+      const response = await fetch("/api/location", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "position", requestId,
+          longitude: position.coords.longitude, latitude: position.coords.latitude,
+          accuracy: position.coords.accuracy, capturedAt: new Date(position.timestamp).toISOString(),
+        }),
+      });
+      if (!response.ok) throw new Error("Could not share your position");
+      const data = await response.json() as { sample: CrewLocationSample };
+      setCrewLocationSamples((current) => [...current.filter((sample) => sample.id !== data.sample.id), data.sample]);
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "Could not share your position");
+    }
+  }
+
+  function publishCurrentPosition(requestId?: string) {
+    if (!navigator.geolocation) { setLocationError("Location is not supported by this browser"); return; }
+    navigator.geolocation.getCurrentPosition((position) => { void publishPosition(position, requestId); },
+      (error) => setLocationError(error.message || "Location permission is required"),
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 20_000 });
+  }
+
+  async function saveLocationSettings(nextMode: LocationMode, nextBasemap: Basemap) {
+    setBasemap(nextBasemap);
+    window.localStorage.setItem("osh26-basemap", nextBasemap);
+    if (!signedIn) { setLocationMode(nextMode); return; }
+    setLocationSaving(true); setLocationError("");
+    try {
+      const response = await fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "settings", mode: nextMode, basemap: nextBasemap }) });
+      const data = await response.json() as { settings?: { mode: LocationMode; basemap: Basemap }; error?: string };
+      if (!response.ok || !data.settings) throw new Error(data.error || "Could not save settings");
+      setLocationMode(data.settings.mode); setBasemap(data.settings.basemap);
+      setLocationNotice("Settings saved.");
+      void loadLocationState();
+    } catch (error) { setLocationError(error instanceof Error ? error.message : "Could not save settings"); }
+    finally { setLocationSaving(false); }
+  }
+
+  async function requestCrewLocations() {
+    if (!crew) { setCrewModal("create"); return; }
+    setLocationSaving(true); setLocationError("");
+    try {
+      const response = await fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "request" }) });
+      const data = await response.json() as { request?: CrewLocationRequest; error?: string };
+      if (!response.ok || !data.request) throw new Error(data.error || "Could not request Crew locations");
+      setCrewLocationRequest(data.request);
+      setLocationNotice("Crew location request sent. Online members will appear as they respond.");
+      setView("map");
+      if (locationMode === "request" || locationMode === "tracking") {
+        lastAnsweredRequestRef.current = data.request.id;
+        publishCurrentPosition(data.request.id);
+      }
+      window.setTimeout(() => { void loadLocationState(); }, 2500);
+    } catch (error) { setLocationError(error instanceof Error ? error.message : "Could not request Crew locations"); }
+    finally { setLocationSaving(false); }
+  }
+
   function locate() {
     navigator.geolocation?.getCurrentPosition(({ coords }) => mapRef.current?.flyTo({ center: [coords.longitude, coords.latitude], zoom: 18, duration: 700 }));
   }
@@ -756,6 +943,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
       <aside className="rail" aria-label="Primary navigation">
         <div className="logo">26</div>
         <nav>{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item} /><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
+        <button className={`rail-settings ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}><Icon name="settings"/><span>Settings</span></button>
         <button className="avatar" title={userName}>{initials || "GP"}</button>
       </aside>
 
@@ -763,6 +951,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
         <header className="topbar">
           <div className="mobile-brand"><div className="logo">26</div><strong>OSH26</strong></div>
           <button className="crew-switcher" onClick={() => setCrewModal(crew ? "manage" : "create")}><Icon name="crew"/><span><small>YOUR CREW</small><strong>{crew?.name || "Create or join a Crew"}</strong></span><em>⌄</em></button>
+          <button className={`mobile-settings ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")} aria-label="Settings"><Icon name="settings"/></button>
           <div className="search-box"><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exhibitors, events or categories" aria-label="Search" />{query && <button onClick={() => setQuery("")}><Icon name="close"/></button>}
             {visibleResults.length > 0 && <div className="search-menu"><div className="search-scroll">{visibleResults.map((match) => match.kind === "exhibitor"
               ? <button key={`exhibitor-${match.item.id}`} onClick={() => selectExhibitor(match.item)}><span><strong>{match.item.name}</strong><small>{match.item.tags.slice(0, 2).join(" · ") || "Exhibitor"}</small></span><b>{match.item.booths.join(", ")}</b></button>
@@ -776,8 +965,10 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
           {!mapReady && <div className="map-loading"><span/><strong>Preparing the AirVenture map…</strong></div>}
           <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors, event venues and build a shared plan.</p></div>
           {isAdmin && !placementMode && !reviewMode && <button className="venue-editor-toggle" onClick={startReportReview}>Review location reports <b>{venueReports.length}</b></button>}
+          {crew && !placementMode && !reviewMode && <button className="crew-location-request" disabled={locationSaving} onClick={requestCrewLocations}><Icon name="crew"/> Locate Crew</button>}
           {!placementMode && !reviewMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
           {venueNotice && !placementMode && <aside className="venue-report-toast" role="status">{venueNotice}<button onClick={() => setVenueNotice("")} aria-label="Dismiss"><Icon name="close"/></button></aside>}
+          {locationNotice && !placementMode && <aside className="venue-report-toast location-toast" role="status">{locationNotice}<button onClick={() => setLocationNotice("")} aria-label="Dismiss"><Icon name="close"/></button></aside>}
           {placementMode && selectedVenue?.coordinates && <aside className="venue-editor">
             <button className="close-card" onClick={() => { setPlacementMode(false); setPlacementDraft(null); }} aria-label="Close location report"><Icon name="close"/></button>
             <small>LOCATION REPORT</small><h2>Report incorrect location</h2>
@@ -818,6 +1009,38 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
           {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
           : crewPlan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors your Crew wants to visit." action="Explore the map" onAction={() => setView("map")} />
           : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p><p className="added-by">Added by: <strong>{addedByName(item)}</strong></p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span>{exhibitorById.has(item.referenceId) && <button className="show-on-map" onClick={() => showExhibitorOnMap(item)}><Icon name="location"/> Show on map</button>}<button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
+        </div>
+
+        <div className={`view content-view settings-view ${view === "settings" ? "visible" : ""}`}>
+          <div className="content-header"><div><span>YOUR PREFERENCES</span><h1>Settings</h1><p>Control location sharing and choose the map background on this device.</p></div></div>
+          <div className="settings-grid">
+            <section className="settings-card">
+              <div className="settings-card-head"><span><Icon name="location"/></span><div><small>PRIVACY</small><h2>Location sharing</h2></div></div>
+              {!signedIn ? <div className="settings-signin"><p>Sign in to share your position with a Crew.</p><a className="primary" href="/signin-with-chatgpt?return_to=%2F">Sign in</a></div> : <>
+                <div className="setting-options location-options">
+                  <button className={locationMode === "off" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings("off", basemap)}><strong>Off</strong><small>No location is shared. Your saved trail is removed.</small></button>
+                  <button className={locationMode === "request" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings("request", basemap)}><strong>On Crew Request</strong><small>Share one current position when an online Crew member asks.</small></button>
+                  <button className={locationMode === "tracking" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings("tracking", basemap)}><strong>Tracking</strong><small>Continuously share and save your trail while the app is open.</small></button>
+                </div>
+                <p className="privacy-note">Your choice is personal. Crew members cannot turn location sharing on for you. Mobile browsers may pause tracking when the app is in the background.</p>
+                <div className="crew-location-box">
+                  <div><strong>Crew positions</strong><small>{latestCrewLocations.length ? `${latestCrewLocations.length} member${latestCrewLocations.length === 1 ? "" : "s"} currently visible` : "No recent Crew positions"}</small></div>
+                  <button disabled={!crew || locationSaving} onClick={requestCrewLocations}><Icon name="crew"/> Request locations</button>
+                </div>
+                {crewLocationRequest && <p className="request-status">Latest request by <strong>{crewLocationRequest.requestedByName}</strong> at {new Date(crewLocationRequest.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
+              </>}
+              {locationError && <p className="form-error">{locationError}</p>}
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-head"><span><Icon name="map"/></span><div><small>MAP</small><h2>Basemap</h2></div></div>
+              <div className="setting-options basemap-options">
+                <button className={basemap === "osm" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings(locationMode, "osm")}><span className="map-preview osm-preview"/><strong>OpenStreetMap</strong><small>Clear streets, buildings and place names.</small></button>
+                <button className={basemap === "ortho" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings(locationMode, "ortho")}><span className="map-preview ortho-preview"/><strong>Ortho</strong><small>Aerial imagery beneath the event map layers.</small></button>
+              </div>
+              <button className="text-button view-map-setting" onClick={() => setView("map")}>View map</button>
+            </section>
+          </div>
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
