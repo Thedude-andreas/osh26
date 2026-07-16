@@ -23,3 +23,16 @@ gzip -dk public/maps/airventure-2026-exhibitor-map-layered.svg.gz
 ## Kalibreringsmodell
 
 Overlayens centrum, omfattning och rotation sparas i geografiska koordinater. Bildens proportioner är låsta till SVG-formatet. Ingen perspektiv- eller affin skevning används i första versionen.
+
+## Supabase
+
+Appen använder Supabase för användaridentitet och crew-data. Lokalt krävs:
+
+```sh
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+```
+
+Skapa tabeller och RLS-policies genom att köra SQL-filen i `supabase/migrations/20260716110000_initial_crew.sql` i Supabase SQL Editor eller via Supabase CLI.
+
+Använd endast publishable key i frontend. Secret/service-role key får inte byggas in i klienten.

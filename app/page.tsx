@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, MapMouseEvent, Marker } from "maplibre-gl";
+import { CrewAuth } from "./crew-auth";
 
 type GeoFeature = {
   type: "Feature";
@@ -216,6 +217,7 @@ export default function Home() {
           <span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Sök utställare, monter eller kategori…" aria-label="Sök utställare" />
           {results.length > 0 && <div className="search-results">{results.map((item) => <button key={item.id} onClick={() => focusExhibitor(item)}><strong>{item.name}</strong><small>{item.booths.join(", ")}</small></button>)}</div>}
         </div>
+        <CrewAuth />
         <button className="panel-toggle" onClick={() => setPanelOpen((value) => !value)}>{panelOpen ? "Dölj panel" : "Visa panel"}</button>
       </header>
 
