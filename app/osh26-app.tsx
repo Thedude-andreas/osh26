@@ -220,6 +220,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const crewMemberNames = useMemo(() => new Map(crewMembers.map((member) => [member.userEmail.toLocaleLowerCase(), member.displayName])), [crewMembers]);
   const crewPlan = useMemo(() => plan.filter((item) => item.kind === "exhibitor"), [plan]);
   const crewCalendarItems = useMemo(() => plan.filter((item) => item.kind === "event"), [plan]);
+  const exhibitorById = useMemo(() => new Map(exhibitors.map((exhibitor) => [exhibitor.id, exhibitor])), [exhibitors]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const eventCategories = useMemo(() => Array.from(new Set(events.map((event) => event.category))).sort(), [events]);
   const eventVenues = useMemo(() => Array.from(new Set(events.map((event) => event.venue).filter(Boolean))).sort(), [events]);
@@ -498,6 +499,18 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     setQuery("");
     highlightExhibitor(item);
     setView("map");
+  }
+
+  function showExhibitorOnMap(item: PlanItem) {
+    const exhibitor = exhibitorById.get(item.referenceId);
+    if (!exhibitor) return;
+    setQuery("");
+    setMapVenueName("");
+    setSelectedEvent(null);
+    setReviewMode(false);
+    setPlacementMode(false);
+    setView("map");
+    highlightExhibitor(exhibitor);
   }
 
   function selectScheduleEvent(item: ScheduleEvent) {
@@ -804,7 +817,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
           <div className="content-header"><div><span>SHARED WITH YOUR CREW</span><h1>Crew Plan</h1><p>Exhibitors and booths your Crew wants to visit.</p></div><button className="primary compact" onClick={() => setView("map")}>+ Add exhibitors</button></div>
           {!crew ? <Empty icon="crew" title="Create a Crew to start planning" text="Invite friends and build one shared list for AirVenture." action="Create Crew" onAction={() => setCrewModal("create")} secondary="Join with a code" onSecondary={() => setCrewModal("join")} />
           : crewPlan.length === 0 ? <Empty icon="plan" title="Your Crew Plan is empty" text="Explore the map and add exhibitors your Crew wants to visit." action="Explore the map" onAction={() => setView("map")} />
-          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p><p className="added-by">Added by: <strong>{addedByName(item)}</strong></p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span><button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
+          : <div className="plan-list">{crewPlan.map((item) => <article key={item.id} className={item.visited ? "visited" : ""}><button className="check-button" onClick={() => toggleVisited(item)} aria-label={item.visited ? "Mark as not visited" : "Mark as visited"}>{item.visited && <Icon name="check"/>}</button><div><small>Exhibitor</small><h2>{item.title}</h2><p>{item.meta}</p><p className="added-by">Added by: <strong>{addedByName(item)}</strong></p></div><div className="plan-actions"><span className="shared-status">{item.visited ? "Visited by Crew" : "Planned"}</span>{exhibitorById.has(item.referenceId) && <button className="show-on-map" onClick={() => showExhibitorOnMap(item)}><Icon name="location"/> Show on map</button>}<button className="remove-item" onClick={() => removeCrewItem(item)} aria-label={`Remove ${item.title}`}><Icon name="trash"/> Remove</button></div></article>)}</div>}
         </div>
 
         <div className={`view content-view ${view === "calendar" ? "visible" : ""}`}>
