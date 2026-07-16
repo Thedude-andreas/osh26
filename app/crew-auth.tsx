@@ -12,11 +12,16 @@ type CrewMembership = {
 };
 
 type AuthStatus = "idle" | "loading" | "sent" | "error";
+type AuthMode = "login" | "signup";
 
 export function CrewAuth() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [crewName, setCrewName] = useState("OSH26 Crew");
   const [memberships, setMemberships] = useState<CrewMembership[]>([]);
   const [status, setStatus] = useState<AuthStatus>("idle");
@@ -48,9 +53,10 @@ export function CrewAuth() {
     if (!supabase) return;
 
     let active = true;
-    const handleSession = (nextSession: Session | null) => {
+    const handleSession = (nextSession: Session | null, event?: string) => {
       if (!active) return;
       setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
       if (!nextSession) {
         setMemberships([]);
         return;
@@ -61,8 +67,8 @@ export function CrewAuth() {
     };
 
     supabase.auth.getSession().then(({ data }) => handleSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      handleSession(nextSession);
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      handleSession(nextSession, event);
     });
 
     return () => {
@@ -72,11 +78,28 @@ export function CrewAuth() {
   }, [supabase, syncUser]);
 
   async function signIn() {
-    if (!supabase || !email.trim()) return;
+    if (!supabase || !email.trim() || !password) return;
     setStatus("loading");
     setMessage(null);
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
+      password,
+    });
+    if (error) {
+      setStatus("error");
+      setMessage(error.message);
+      return;
+    }
+    setStatus("idle");
+  }
+
+  async function signUp() {
+    if (!supabase || !email.trim() || !password) return;
+    setStatus("loading");
+    setMessage(null);
+    const { error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
       options: { emailRedirectTo: window.location.origin },
     });
     if (error) {
@@ -85,7 +108,39 @@ export function CrewAuth() {
       return;
     }
     setStatus("sent");
-    setMessage("Inloggningslank skickad. Kolla mejlen och oppna lanken pa samma enhet.");
+    setMessage("Konto skapat. Bekräfta din email och logga sedan in.");
+  }
+
+  async function requestPasswordReset() {
+    if (!supabase || !email.trim()) return;
+    setStatus("loading");
+    setMessage(null);
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      setStatus("error");
+      setMessage(error.message);
+      return;
+    }
+    setStatus("sent");
+    setMessage("Återställningslänk skickad till din email.");
+  }
+
+  async function updatePassword() {
+    if (!supabase || !newPassword) return;
+    setStatus("loading");
+    setMessage(null);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setStatus("error");
+      setMessage(error.message);
+      return;
+    }
+    setNewPassword("");
+    setPasswordRecovery(false);
+    setStatus("idle");
+    setMessage("Lösenordet är uppdaterat.");
   }
 
   async function signOut() {
@@ -93,6 +148,7 @@ export function CrewAuth() {
     await supabase.auth.signOut();
     setSession(null);
     setMemberships([]);
+    setPasswordRecovery(false);
   }
 
   async function createCrew() {
@@ -138,10 +194,21 @@ export function CrewAuth() {
   if (!session) {
     return (
       <div className="crew-auth">
-        <strong>Crew-login</strong>
-        <div className="crew-auth-row">
+        <div className="crew-auth-head">
+          <strong>{authMode === "login" ? "Crew-login" : "Skapa konto"}</strong>
+          <button onClick={() => setAuthMode((value) => value === "login" ? "signup" : "login")}>
+            {authMode === "login" ? "Ny" : "Login"}
+          </button>
+        </div>
+        <div className="crew-auth-fields">
           <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="namn@example.com" type="email" />
-          <button onClick={signIn} disabled={status === "loading"}>Skicka lank</button>
+          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Lösenord" type="password" />
+        </div>
+        <div className="crew-auth-actions">
+          <button onClick={authMode === "login" ? signIn : signUp} disabled={status === "loading"}>
+            {authMode === "login" ? "Logga in" : "Skapa"}
+          </button>
+          {authMode === "login" && <button onClick={requestPasswordReset} disabled={status === "loading" || !email.trim()}>Reset</button>}
         </div>
         {message && <span>{message}</span>}
       </div>
@@ -153,11 +220,16 @@ export function CrewAuth() {
   return (
     <div className="crew-auth">
       <div className="crew-auth-head">
-        <strong>{activeCrew ? activeCrew.name : "Ingen crew"}</strong>
+        <strong>{passwordRecovery ? "Nytt lösenord" : activeCrew ? activeCrew.name : "Ingen crew"}</strong>
         <button onClick={signOut}>Logga ut</button>
       </div>
       <span>{session.user.email}</span>
-      {activeCrew ? (
+      {passwordRecovery ? (
+        <div className="crew-auth-row">
+          <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Nytt lösenord" type="password" />
+          <button onClick={updatePassword} disabled={status === "loading"}>Spara</button>
+        </div>
+      ) : activeCrew ? (
         <span>{memberships.length} crew-medlemskap aktivt</span>
       ) : (
         <div className="crew-auth-row">

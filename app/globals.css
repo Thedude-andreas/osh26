@@ -25,6 +25,8 @@ button, input { font:inherit; }
 .crew-auth strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
 .crew-auth span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); }
 .crew-auth-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }
+.crew-auth-fields { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:6px; }
+.crew-auth-actions { display:grid; grid-template-columns:1fr auto; gap:6px; }
 .crew-auth input { min-width:0; width:100%; padding:6px 7px; border:1px solid #c9d5d1; border-radius:7px; background:white; color:var(--ink); font-size:11px; }
 .crew-auth button { padding:6px 8px; border:1px solid #bfd3cd; border-radius:7px; background:white; color:var(--ink); cursor:pointer; font-size:11px; font-weight:800; white-space:nowrap; }
 .crew-auth button:disabled { opacity:.5; cursor:not-allowed; }
@@ -86,6 +88,7 @@ button, input { font:inherit; }
   .brand-mark { width:38px; height:38px; }
   .brand > div { display:none; }
   .crew-auth { grid-column:1 / -1; }
+  .crew-auth-fields { grid-template-columns:1fr; }
   .panel-toggle { width:40px; overflow:hidden; color:transparent; padding:0; }
   .panel-toggle::after { content:"☰"; color:var(--ink); font-size:17px; }
   .layer-card { left:8px; top:8px; width:190px; padding:10px; }
