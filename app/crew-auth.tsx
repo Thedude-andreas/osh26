@@ -14,6 +14,10 @@ type CrewMembership = {
 type AuthStatus = "idle" | "loading" | "sent" | "error";
 type AuthMode = "login" | "signup";
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export function CrewAuth() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
@@ -62,7 +66,7 @@ export function CrewAuth() {
         return;
       }
       syncUser(nextSession.user).catch((error: unknown) => {
-        setMessage(error instanceof Error ? error.message : "Kunde inte synka användaren.");
+        setMessage(errorMessage(error, "Kunde inte synka användaren."));
       });
     };
 
@@ -156,30 +160,24 @@ export function CrewAuth() {
     setStatus("loading");
     setMessage(null);
 
-    const crewId = crypto.randomUUID();
-    const { error: crewError } = await supabase
-      .from("crews")
-      .insert({ id: crewId, name: crewName.trim(), created_by: session.user.id });
-    if (crewError) {
-      setStatus("error");
-      setMessage(crewError.message);
-      return;
-    }
-
-    const { error: memberError } = await supabase.from("crew_members").insert({
-      crew_id: crewId,
-      user_id: session.user.id,
-      role: "owner",
-      display_name: session.user.email?.split("@")[0] ?? "Crew",
+    const { error } = await supabase.rpc("create_crew", {
+      crew_name: crewName.trim(),
+      member_display_name: session.user.email?.split("@")[0] ?? "Crew",
     });
-    if (memberError) {
+    if (error) {
       setStatus("error");
-      setMessage(memberError.message);
+      setMessage(error.message);
       return;
     }
 
-    await loadMemberships();
-    setStatus("idle");
+    try {
+      await loadMemberships();
+      setStatus("idle");
+      setMessage(null);
+    } catch (loadError) {
+      setStatus("error");
+      setMessage(errorMessage(loadError, "Crew skapades men kunde inte laddas."));
+    }
   }
 
   if (!supabase) {
