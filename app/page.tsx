@@ -45,10 +45,11 @@ export default function Home() {
     if (!mapContainer.current || mapRef.current) return;
     let map: MapLibreMap;
     try {
+      const initialZoom = window.matchMedia("(min-width: 1024px)").matches ? 15.75 : 16.2;
       map = new maplibregl.Map({
         container: mapContainer.current,
         center: CENTER,
-        zoom: 16.2,
+        zoom: initialZoom,
         minZoom: 13,
         maxZoom: 21,
         attributionControl: false,
