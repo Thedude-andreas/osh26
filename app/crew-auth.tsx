@@ -15,7 +15,9 @@ type AuthStatus = "idle" | "loading" | "sent" | "error";
 type AuthMode = "login" | "signup";
 
 function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "message" in error && typeof error.message === "string") return error.message;
+  return fallback;
 }
 
 export function CrewAuth() {

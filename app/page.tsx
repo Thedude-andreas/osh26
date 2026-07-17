@@ -168,6 +168,11 @@ export default function Home() {
     map.setFilter("stall-outline", filter as never);
   }, [labelSize, labelsVisible, ready, tagFilter]);
 
+  useEffect(() => {
+    if (!ready) return;
+    requestAnimationFrame(() => mapRef.current?.resize());
+  }, [panelOpen, ready]);
+
   const tags = useMemo(() => Array.from(new Set(exhibitors.flatMap((item) => item.tags))).sort(), [exhibitors]);
   const exhibitorById = useMemo(() => new Map(exhibitors.map((item) => [item.id, item])), [exhibitors]);
   const activeExhibitors = useMemo(() => {
@@ -218,41 +223,45 @@ export default function Home() {
           <span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Sök utställare, monter eller kategori…" aria-label="Sök utställare" />
           {results.length > 0 && <div className="search-results">{results.map((item) => <button key={item.id} onClick={() => focusExhibitor(item)}><strong>{item.name}</strong><small>{item.booths.join(", ")}</small></button>)}</div>}
         </div>
-        <CrewAuth />
         <button className="panel-toggle" onClick={() => setPanelOpen((value) => !value)}>{panelOpen ? "Dölj panel" : "Visa panel"}</button>
       </header>
 
-      <section className="map-shell">
-        <div ref={mapContainer} className="map-canvas" />
-        {!ready && <div className="loading-card"><span /><strong>Laddar officiella utställardata…</strong></div>}
-        {mapError && <div className="map-error"><strong>Kartan kunde inte visas</strong><span>{mapError}</span><button onClick={() => location.reload()}>Försök igen</button></div>}
-        <div className="layer-card">
-          <strong>Lager</strong>
-          <label><input type="checkbox" checked={stallsVisible} onChange={(event) => setStallsVisible(event.target.checked)} /> Monterpolygoner</label>
-          <label><input type="checkbox" checked={labelsVisible} onChange={(event) => setLabelsVisible(event.target.checked)} /> Officiella etiketter</label>
-          <label className="filter-control"><span>Kategori</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">Alla kategorier</option>{tags.map((tag) => <option key={tag}>{tag}</option>)}</select></label>
-          <label className="size-control"><span>Textstorlek <b>{labelSize}px</b></span><input type="range" min="8" max="18" value={labelSize} onChange={(event) => setLabelSize(Number(event.target.value))} /></label>
+      <section className={`map-shell${panelOpen ? "" : " panel-closed"}`}>
+        <div className="map-stage">
+          <div ref={mapContainer} className="map-canvas" />
+          {!ready && <div className="loading-card"><span /><strong>Laddar officiella utställardata…</strong></div>}
+          {mapError && <div className="map-error"><strong>Kartan kunde inte visas</strong><span>{mapError}</span><button onClick={() => location.reload()}>Försök igen</button></div>}
+          <div className="layer-card">
+            <strong>Lager</strong>
+            <label><input type="checkbox" checked={stallsVisible} onChange={(event) => setStallsVisible(event.target.checked)} /> Monterpolygoner</label>
+            <label><input type="checkbox" checked={labelsVisible} onChange={(event) => setLabelsVisible(event.target.checked)} /> Officiella etiketter</label>
+            <label className="filter-control"><span>Kategori</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">Alla kategorier</option>{tags.map((tag) => <option key={tag}>{tag}</option>)}</select></label>
+            <label className="size-control"><span>Textstorlek <b>{labelSize}px</b></span><input type="range" min="8" max="18" value={labelSize} onChange={(event) => setLabelSize(Number(event.target.value))} /></label>
+          </div>
         </div>
 
-        {panelOpen && <aside className="inspector">
-          <div className="inspector-head"><div><span>VALIDERING</span><h1>{title}</h1></div><button onClick={() => setPanelOpen(false)}>×</button></div>
-          {(selectedLabel || selectedStall) ? <>
-            {activeExhibitors[0]?.logoUrl && <img className="exhibitor-logo" src={activeExhibitors[0].logoUrl} alt={`${activeExhibitors[0].name} logotyp`} />}
-            <dl>
-              <div><dt>Monter</dt><dd>{String((selectedLabel || selectedStall)?.properties.boothNumber || "Ej kopplad")}</dd></div>
-              <div><dt>Polygon</dt><dd>{String(selectedLabel?.properties.stallId || selectedStall?.properties.id || "—")}</dd></div>
-              <div><dt>Matchning</dt><dd>{String((selectedLabel || selectedStall)?.properties.matchStatus || "Ej kopplad")}</dd></div>
-              {selectedLabel && <div><dt>Avstånd</dt><dd>{String(selectedLabel.properties.matchDistanceMeters)} m</dd></div>}
-            </dl>
-            {activeExhibitors.map((item) => <section className="exhibitor-info" key={item.id}>
-              {item.description && <p>{item.description}{item.descriptionStatus === "preview" ? "…" : ""}</p>}
-              <div className="tag-list">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
-            </section>)}
-            <p className="help-copy">Kontrollera att det officiella företagsnamnet och monternumret ligger vid rätt polygon.</p>
-            {selectedLabel && <div className="review-actions"><button className="ok" onClick={() => review("ok")}>✓ Kopplingen stämmer</button><button onClick={() => review("text")}>Fel utställare/nummer</button><button onClick={() => review("position")}>Fel polygon/position</button></div>}
-          </> : <div className="empty-inspector"><span>⌖</span><p>Tryck på en monter eller företags­etikett för att inspektera kopplingen.</p></div>}
-          <div className="review-summary"><div><strong>{reviewCounts.ok}</strong><span>Godkända</span></div><div><strong>{reviewCounts.text}</strong><span>Datafel</span></div><div><strong>{reviewCounts.position}</strong><span>Positionsfel</span></div></div>
-          <button className="export-button" disabled={Object.keys(reviews).length === 0} onClick={exportReviews}>Exportera granskning</button>
+        {panelOpen && <aside className="side-panel">
+          <CrewAuth />
+          <div className="inspector">
+            <div className="inspector-head"><div><span>VALIDERING</span><h1>{title}</h1></div><button onClick={() => setPanelOpen(false)}>×</button></div>
+            {(selectedLabel || selectedStall) ? <>
+              {activeExhibitors[0]?.logoUrl && <img className="exhibitor-logo" src={activeExhibitors[0].logoUrl} alt={`${activeExhibitors[0].name} logotyp`} />}
+              <dl>
+                <div><dt>Monter</dt><dd>{String((selectedLabel || selectedStall)?.properties.boothNumber || "Ej kopplad")}</dd></div>
+                <div><dt>Polygon</dt><dd>{String(selectedLabel?.properties.stallId || selectedStall?.properties.id || "—")}</dd></div>
+                <div><dt>Matchning</dt><dd>{String((selectedLabel || selectedStall)?.properties.matchStatus || "Ej kopplad")}</dd></div>
+                {selectedLabel && <div><dt>Avstånd</dt><dd>{String(selectedLabel.properties.matchDistanceMeters)} m</dd></div>}
+              </dl>
+              {activeExhibitors.map((item) => <section className="exhibitor-info" key={item.id}>
+                {item.description && <p>{item.description}{item.descriptionStatus === "preview" ? "…" : ""}</p>}
+                <div className="tag-list">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
+              </section>)}
+              <p className="help-copy">Kontrollera att det officiella företagsnamnet och monternumret ligger vid rätt polygon.</p>
+              {selectedLabel && <div className="review-actions"><button className="ok" onClick={() => review("ok")}>✓ Kopplingen stämmer</button><button onClick={() => review("text")}>Fel utställare/nummer</button><button onClick={() => review("position")}>Fel polygon/position</button></div>}
+            </> : <div className="empty-inspector"><span>⌖</span><p>Tryck på en monter eller företags­etikett för att inspektera kopplingen.</p></div>}
+            <div className="review-summary"><div><strong>{reviewCounts.ok}</strong><span>Godkända</span></div><div><strong>{reviewCounts.text}</strong><span>Datafel</span></div><div><strong>{reviewCounts.position}</strong><span>Positionsfel</span></div></div>
+            <button className="export-button" disabled={Object.keys(reviews).length === 0} onClick={exportReviews}>Exportera granskning</button>
+          </div>
         </aside>}
       </section>
     </main>
