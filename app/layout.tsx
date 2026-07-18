@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Starter Project",
-  description: "A clean starting point for building your site.",
+  title: "OSH26 — Crew planning for AirVenture",
+  description: "Plan AirVenture 2026 together with your Crew.",
   other: {
     "codex-preview": "development",
   },
