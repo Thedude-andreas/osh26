@@ -1,75 +1,78 @@
-# osh26
+# OSH26
 
 Huvudappen för AirVenture Oshkosh 2026.
 
-## Kartunderlag
+## App
 
-Utställarkartan är en lagerindelad SVG med separata grupper för bas, stalls och etiketter. Den georefereras mot OpenStreetMap med en proportionell overlay: placering, enhetlig skala och rotation utan skevning.
+Aktuell app är mobil först, men ska fungera på desktop:
 
-Aktuell kalibrering finns i `config/exhibitor-map-overlay.json`.
+- karta med utställare och eventplatser
+- crew-planering
+- kalender
+- platsdelning
+- venue placement/reports för admin
 
-Den komprimerade kartan finns i `public/maps/airventure-2026-exhibitor-map-layered.svg.gz`. Återskapa SVG-filen lokalt med:
+Primär UI-kod ligger i `app/osh26-app.tsx`. `app/page.tsx` hämtar ChatGPT-identitet via `app/chatgpt-auth.ts` och skickar den till appen.
 
-```sh
-gzip -dk public/maps/airventure-2026-exhibitor-map-layered.svg.gz
-```
+## Data
 
-## Planerad struktur
+Statiska data ligger under `public/data/`.
 
-- `config/` – kartkalibrering och appkonfiguration
-- `public/maps/` – vektoriserade kartunderlag
-- `src/` – huvudappens kod när implementationen startar
+- `exhibitors.json`
+- `stalls.geojson`
+- `booth-labels.geojson`
+- `events.json`
+- `event-venues.json`
+- `event-venues.geojson`
 
-## Kalibreringsmodell
-
-Overlayens centrum, omfattning och rotation sparas i geografiska koordinater. Bildens proportioner är låsta till SVG-formatet. Ingen perspektiv- eller affin skevning används i första versionen.
-
-## Supabase
-
-Appen använder Supabase för användaridentitet och crew-data. Auth-flödet är email/password med email-verifiering, password reset och Supabase RLS.
-
-Lokalt krävs:
+Eventplatser byggs från importerade AirVenture/OSM-källor:
 
 ```sh
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+python3 scripts/build-event-venues.py
 ```
 
-Skapa tabeller och RLS-policies genom att köra SQL-filerna i `supabase/migrations/` i Supabase SQL Editor eller via Supabase CLI.
+## Runtime
 
-Använd endast publishable key i frontend. Secret/service-role key får inte byggas in i klienten.
+Appen använder Vinext/Cloudflare Sites-formen med D1 via Drizzle.
 
-### Supabase Auth
+Viktiga kommandon:
 
-Konfigurera Supabase Dashboard:
+```sh
+npm run dev
+npm run build
+npm test
+npm run lint
+npm run db:generate
+```
 
-- Authentication -> Sign In / Providers -> Email: aktivera Email provider
-- Aktivera email/password signups
-- Aktivera email confirmation
-- Aktivera password recovery
-- Authentication -> URL Configuration:
-  - Site URL: `http://127.0.0.1:5173` lokalt, senare `https://osh26.andreasmartensson.com`
-  - Redirect URLs:
-    - `http://127.0.0.1:5173`
-    - `http://localhost:5173`
-    - `https://osh26.andreasmartensson.com`
+Lokalt krävs Node.js `>=22.13.0`.
 
-### Custom SMTP
+## Auth
 
-För produktion och för att slippa Supabase standardgräns på auth-mail ska projektet använda Custom SMTP, samma modell som VFRPlan.
+Den sammanslagna mobilappen använder ChatGPT/Sites identity headers:
 
-Rekommenderad Resend-konfiguration:
+- `oai-authenticated-user-email`
+- `oai-authenticated-user-full-name`
 
-- Sender: `OSH26 <no-reply@osh26.andreasmartensson.com>`
-- SMTP host: `smtp.resend.com`
-- SMTP port: `587`
-- SMTP username: `resend`
-- SMTP password: Resend SMTP/API secret
-- Sender name: `OSH26`
+Hjälpfunktionerna finns i `app/chatgpt-auth.ts`.
 
-Lägg in DNS-posterna som Resend ger för SPF/DKIM hos one.com innan produktion.
+Supabase-filerna i `supabase/` finns kvar från parallellspåret med email/password-auth och RLS. De är inte primär runtime för den aktuella mobilappen om inte vi uttryckligen byter tillbaka till Supabase-auth.
 
-Emailtemplates finns i:
+## Databas
 
-- `supabase/templates/confirmation.html`
-- `supabase/templates/recovery.html`
+D1-schema ligger i `db/schema.ts` och migrationer i `drizzle/`.
+
+Mobilappen använder D1-tabeller för:
+
+- crews
+- crew_members
+- crew_items
+- venue_placements
+- venue_location_reports
+- location_preferences
+- location_requests
+- location_samples
+
+## Deploy
+
+Deploy görs bara när användaren uttryckligen ber om det.

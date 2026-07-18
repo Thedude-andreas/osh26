@@ -1,5 +1,5 @@
 {
-  "name": "osh26-map",
+  "name": "osh26",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -18,8 +18,9 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.110.6",
     "drizzle-orm": "0.45.2",
-    "maplibre-gl": "^5.10.0",
+    "maplibre-gl": "^5.24.0",
     "next": "16.2.6",
+    "qrcode": "^1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -27,6 +28,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
@@ -42,5 +44,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "OSH26 Map"
+  "displayName": "OSH26"
 }
