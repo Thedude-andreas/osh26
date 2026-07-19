@@ -1,15 +1,15 @@
 import { asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { crewItems, crewMembers, crews } from "../../../db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getSupabaseApiUser } from "../auth-user";
 
 function inviteCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
-export async function GET() {
-  const user = await getChatGPTUser();
+export async function GET(request: Request) {
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const db = await getDb();
   const memberships = await db.select({ crew: crews, role: crewMembers.role })
@@ -23,7 +23,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const payload = await request.json() as { action?: "create" | "join"; name?: string; code?: string };
   const db = await getDb();

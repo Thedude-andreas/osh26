@@ -2,7 +2,7 @@ import { asc } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { venuePlacements } from "../../../db/schema";
 import { isAdminEmail } from "../../admin";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getSupabaseApiUser } from "../auth-user";
 
 export async function GET() {
   const db = await getDb();
@@ -11,7 +11,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   if (!isAdminEmail(user.email)) return Response.json({ error: "Admin access required" }, { status: 403 });
   const payload = await request.json() as { venueName?: string; longitude?: number; latitude?: number };

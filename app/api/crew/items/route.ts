@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { crewItems, crewMembers } from "../../../../db/schema";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { getSupabaseApiUser } from "../../auth-user";
 
 async function isMember(crewId: string, email: string) {
   const db = await getDb();
@@ -10,7 +10,7 @@ async function isMember(crewId: string, email: string) {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const payload = await request.json() as {
     action?: "add" | "toggleVisited" | "remove";

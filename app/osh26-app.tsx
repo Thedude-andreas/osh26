@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import QRCode from "qrcode";
+import type { Session } from "@supabase/supabase-js";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 type View = "map" | "plan" | "calendar" | "settings";
 type LocationMode = "off" | "request" | "tracking";
@@ -33,6 +35,7 @@ type VenuePlacement = { venueName: string; longitude: number; latitude: number; 
 type VenueReport = { id: string; venueName: string; currentLongitude: number; currentLatitude: number; proposedLongitude: number; proposedLatitude: number; note: string; status: "pending" | "approved" | "rejected"; reportedBy: string; createdAt: string };
 type CrewLocationRequest = { id: string; crewId: string; requestedBy: string; requestedByName: string; createdAt: string };
 type CrewLocationSample = { id: string; crewId: string; userEmail: string; displayName: string; kind: "request" | "tracking"; requestId: string | null; longitude: number; latitude: number; accuracy: number; capturedAt: string };
+type AuthMode = "login" | "signup";
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
@@ -125,7 +128,7 @@ function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" 
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
-export default function Osh26App({ userName, signedIn, isAdmin }: { userName: string; signedIn: boolean; isAdmin: boolean }) {
+export default function Osh26App({ userName: initialUserName, signedIn: initialSignedIn, isAdmin: initialIsAdmin }: { userName: string; signedIn: boolean; isAdmin: boolean }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
@@ -169,6 +172,13 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const [locationNotice, setLocationNotice] = useState("");
   const [selected, setSelected] = useState<Exhibitor | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ScheduleEvent | null>(null);
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-07-20");
   const [calendarMode, setCalendarMode] = useState<"crew" | "all">("crew");
   const [eventCategory, setEventCategory] = useState("");
@@ -180,13 +190,55 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   const [crewMembers, setCrewMembers] = useState<CrewMember[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<PlanItem | null>(null);
   const [crew, setCrew] = useState<Crew | null>(null);
-  const [crewModal, setCrewModal] = useState<"create" | "join" | "manage" | null>(null);
+  const [crewModal, setCrewModal] = useState<"auth" | "create" | "join" | "manage" | null>(null);
   const [draftCrewName, setDraftCrewName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [mapReady, setMapReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [crewError, setCrewError] = useState("");
   const [qrCode, setQrCode] = useState("");
+  const authToken = session?.access_token ?? "";
+  const signedIn = Boolean(session) || initialSignedIn;
+  const userEmail = session?.user.email ?? "";
+  const userName = session?.user.user_metadata?.full_name || userEmail.split("@")[0] || initialUserName;
+  const isAdmin = initialIsAdmin || userEmail.toLowerCase() === "andreas@andreasmartensson.com";
+  const authHeaders = useMemo(() => authToken ? { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` } : { "Content-Type": "application/json" }, [authToken]);
+
+  async function signIn() {
+    if (!supabase || !authEmail.trim() || !authPassword) return;
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+    if (error) setAuthMessage(error.message);
+    else {
+      setAuthPassword("");
+      setAuthMessage("");
+    }
+    setAuthLoading(false);
+  }
+
+  async function signUp() {
+    if (!supabase || !authEmail.trim() || !authPassword) return;
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.signUp({
+      email: authEmail.trim(),
+      password: authPassword,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) setAuthMessage(error.message);
+    else setAuthMessage("Konto skapat. Bekräfta emailen och logga sedan in.");
+    setAuthLoading(false);
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setSession(null);
+    setCrew(null);
+    setPlan([]);
+    setCrewMembers([]);
+  }
 
   const searchMatches = useMemo<SearchMatch[]>(() => {
     const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -275,12 +327,28 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   }, [crewLocationSamples]);
 
   useEffect(() => {
-    if (!signedIn) return;
-    fetch("/api/crew").then(async (response) => {
+    if (!supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (active) setSession(data.session);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession && crewModal === "auth") setCrewModal(null);
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [crewModal, supabase]);
+
+  useEffect(() => {
+    if (!signedIn || !authToken) return;
+    fetch("/api/crew", { headers: authHeaders }).then(async (response) => {
       if (!response.ok) throw new Error("Could not load your Crew");
       return response.json() as Promise<{ crew: Crew | null; items: PlanItem[]; members?: CrewMember[] }>;
     }).then((data) => { setCrew(data.crew); setPlan(data.items); setCrewMembers(data.members || []); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
-  }, [signedIn]);
+  }, [authHeaders, authToken, signedIn]);
 
   useEffect(() => {
     fetch("/data/events.json").then((response) => response.json()).then((data: { events: ScheduleEvent[] }) => setEvents(data.events)).catch(() => setEvents([]));
@@ -288,10 +356,10 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
 
   useEffect(() => {
     if (!isAdmin) return;
-    fetch("/api/venue-reports").then((response) => response.ok ? response.json() : { reports: [] })
+    fetch("/api/venue-reports", { headers: authHeaders }).then((response) => response.ok ? response.json() : { reports: [] })
       .then((data: { reports: VenueReport[] }) => setVenueReports(data.reports))
       .catch(() => setVenueReports([]));
-  }, [isAdmin]);
+  }, [authHeaders, authToken, isAdmin]);
 
   useEffect(() => {
     Promise.all([
@@ -652,7 +720,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     if (!crew) { setCrewModal("create"); return; }
     if (plannedIds.has(item.id)) return;
     setSaving(true);
-    fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", crewId: crew.id, kind: "exhibitor", referenceId: item.id, title: item.name, meta: `Booth ${item.booths.join(", ")}` }) })
+    fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "add", crewId: crew.id, kind: "exhibitor", referenceId: item.id, title: item.name, meta: `Booth ${item.booths.join(", ")}` }) })
       .then(async (response) => { if (!response.ok) throw new Error("Could not add this exhibitor"); return response.json() as Promise<{ item: PlanItem }>; })
       .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
       .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Plan"))
@@ -665,7 +733,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     setSaving(true);
     fetch("/api/crew/items", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
         action: "add",
         crewId: crew.id,
@@ -685,7 +753,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   async function persistRemoval(item: PlanItem) {
     if (!crew) return;
     try {
-      const response = await fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", crewId: crew.id, itemId: item.id }) });
+      const response = await fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "remove", crewId: crew.id, itemId: item.id }) });
       if (!response.ok) throw new Error("Could not remove this item");
     } catch (error) {
       setPlan((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
@@ -721,10 +789,10 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   async function createCrew() {
     const name = draftCrewName.trim();
     if (!name) return;
-    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    if (!signedIn) { setCrewModal("create"); return; }
     setSaving(true); setCrewError("");
     try {
-      const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", name }) });
+      const response = await fetch("/api/crew", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "create", name }) });
       const data = await response.json() as { crew?: Crew; items?: PlanItem[]; members?: CrewMember[]; error?: string };
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not create the Crew");
       setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal("manage"); setDraftCrewName("");
@@ -734,10 +802,10 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
 
   async function joinCrew() {
     if (joinCode.trim().length < 4) return;
-    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    if (!signedIn) { setCrewModal("join"); return; }
     setSaving(true); setCrewError("");
     try {
-      const response = await fetch("/api/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "join", code: joinCode }) });
+      const response = await fetch("/api/crew", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "join", code: joinCode }) });
       const data = await response.json() as { crew?: Crew; items?: PlanItem[]; members?: CrewMember[]; error?: string };
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not join the Crew");
       setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal(null); setJoinCode("");
@@ -750,7 +818,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     const visited = !item.visited;
     setPlan((current) => current.map((entry) => entry.id === item.id ? { ...entry, visited } : entry));
     try {
-      const response = await fetch("/api/crew/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "toggleVisited", crewId: crew.id, itemId: item.id, visited }) });
+      const response = await fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "toggleVisited", crewId: crew.id, itemId: item.id, visited }) });
       const data = await response.json() as { item?: PlanItem; error?: string };
       if (!response.ok || !data.item) throw new Error(data.error || "Could not update Visited status");
       setPlan((current) => current.map((entry) => entry.id === item.id ? data.item! : entry));
@@ -762,7 +830,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
 
   async function loadLocationState() {
     try {
-      const response = await fetch("/api/location", { cache: "no-store" });
+      const response = await fetch("/api/location", { cache: "no-store", headers: authHeaders });
       if (!response.ok) return;
       const data = await response.json() as { settings: { mode: LocationMode; basemap: Basemap }; request: CrewLocationRequest | null; samples: CrewLocationSample[] };
       setLocationMode(data.settings.mode);
@@ -782,7 +850,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
   async function publishPosition(position: GeolocationPosition, requestId?: string) {
     try {
       const response = await fetch("/api/location", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders,
         body: JSON.stringify({
           action: "position", requestId,
           longitude: position.coords.longitude, latitude: position.coords.latitude,
@@ -810,7 +878,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     if (!signedIn) { setLocationMode(nextMode); return; }
     setLocationSaving(true); setLocationError("");
     try {
-      const response = await fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "settings", mode: nextMode, basemap: nextBasemap }) });
+      const response = await fetch("/api/location", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "settings", mode: nextMode, basemap: nextBasemap }) });
       const data = await response.json() as { settings?: { mode: LocationMode; basemap: Basemap }; error?: string };
       if (!response.ok || !data.settings) throw new Error(data.error || "Could not save settings");
       setLocationMode(data.settings.mode); setBasemap(data.settings.basemap);
@@ -824,7 +892,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     if (!crew) { setCrewModal("create"); return; }
     setLocationSaving(true); setLocationError("");
     try {
-      const response = await fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "request" }) });
+      const response = await fetch("/api/location", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "request" }) });
       const data = await response.json() as { request?: CrewLocationRequest; error?: string };
       if (!response.ok || !data.request) throw new Error(data.error || "Could not request Crew locations");
       setCrewLocationRequest(data.request);
@@ -847,7 +915,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     const venue = venueByName.get(name);
     const map = mapRef.current;
     if (!venue?.coordinates) return;
-    if (!signedIn) { window.location.href = "/signin-with-chatgpt?return_to=%2F"; return; }
+    if (!signedIn) { setCrewModal("auth"); return; }
     setView("map");
     setSelectedEvent(null);
     setSelectedVenueName(name);
@@ -866,7 +934,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     if (!selectedVenue?.coordinates || !placementDraft) return;
     setVenueSaving(true); setVenueError("");
     try {
-      const response = await fetch("/api/venue-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      const response = await fetch("/api/venue-reports", { method: "POST", headers: authHeaders, body: JSON.stringify({
         action: "submit",
         venueName: selectedVenue.name,
         currentLongitude: selectedVenue.coordinates[0],
@@ -910,7 +978,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     if (!selectedReport) return;
     setVenueSaving(true); setVenueError("");
     try {
-      const response = await fetch("/api/venue-reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, id: selectedReport.id }) });
+      const response = await fetch("/api/venue-reports", { method: "POST", headers: authHeaders, body: JSON.stringify({ action, id: selectedReport.id }) });
       const data = await response.json() as { placement?: VenuePlacement | null; error?: string };
       if (!response.ok) throw new Error(data.error || "Could not review this report");
       if (data.placement) setManualVenuePlacements((current) => [...current.filter((placement) => placement.venueName !== data.placement!.venueName), data.placement!]);
@@ -934,6 +1002,20 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
     mapRef.current?.flyTo({ center: venue.coordinates, zoom: 18.2, duration: 700 });
   }
 
+  const authContent = (
+    <>
+      <span>CREW ACCOUNT</span>
+      <h1>{authMode === "login" ? "Logga in" : "Skapa konto"}</h1>
+      <p>Logga in med email och lösenord för att skapa crew, dela plats och spara crew-planen.</p>
+      {!supabase ? <p className="form-error">Supabase saknas. Kontrollera NEXT_PUBLIC_SUPABASE_URL och NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</p> : <>
+        <label>Email<input autoFocus value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="namn@example.com" type="email" autoComplete="email" /></label>
+        <label>Lösenord<input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Lösenord" type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} onKeyDown={(event) => { if (event.key === "Enter") void (authMode === "login" ? signIn() : signUp()); }} /></label>
+        {authMessage && <p className={authMessage.includes("skap") || authMessage.includes("Bekr") ? "form-note" : "form-error"}>{authMessage}</p>}
+        <button className="primary" disabled={authLoading || !authEmail.trim() || !authPassword} onClick={() => { void (authMode === "login" ? signIn() : signUp()); }}>{authLoading ? "Vänta..." : authMode === "login" ? "Logga in" : "Skapa konto"}</button>
+        <button className="text-button" onClick={() => { setAuthMessage(""); setAuthMode(authMode === "login" ? "signup" : "login"); }}>{authMode === "login" ? "Skapa nytt konto" : "Jag har redan konto"}</button>
+      </>}
+    </>
+  );
   const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const activeDate = CALENDAR_DATES.find((date) => date.value === selectedDate) || CALENDAR_DATES[2];
   const fullDay = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(`${selectedDate}T12:00:00Z`)).toUpperCase();
@@ -1016,7 +1098,7 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
           <div className="settings-grid">
             <section className="settings-card">
               <div className="settings-card-head"><span><Icon name="location"/></span><div><small>PRIVACY</small><h2>Location sharing</h2></div></div>
-              {!signedIn ? <div className="settings-signin"><p>Sign in to share your position with a Crew.</p><a className="primary" href="/signin-with-chatgpt?return_to=%2F">Sign in</a></div> : <>
+              {!signedIn ? <div className="settings-signin"><p>Logga in för att dela din position med en Crew.</p><button className="primary" onClick={() => setCrewModal("auth")}>Logga in</button></div> : <>
                 <div className="setting-options location-options">
                   <button className={locationMode === "off" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings("off", basemap)}><strong>Off</strong><small>No location is shared. Your saved trail is removed.</small></button>
                   <button className={locationMode === "request" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings("request", basemap)}><strong>On Crew Request</strong><small>Share one current position when an online Crew member asks.</small></button>
@@ -1076,11 +1158,11 @@ export default function Osh26App({ userName, signedIn, isAdmin }: { userName: st
 
       <nav className="bottom-nav">{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item}/><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
 
-      {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name="crew"/></div>{crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || !draftCrewName.trim()} onClick={createCrew}>{saving ? "Creating…" : "Create Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("join"); }}>I have an invite code</button></> : crewModal === "join" ? <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || joinCode.trim().length < 4} onClick={joinCrew}>{saving ? "Joining…" : "Join Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("create"); }}>Create a new Crew instead</button></> : crew ? <><span>INVITE CREW MEMBERS</span><h1>{crew.name}</h1><p>Share this invite code or let a friend scan the QR code.</p>{qrCode && <Image unoptimized className="invite-qr" width={180} height={180} src={qrCode} alt={`QR code to join ${crew.name}`} />}<div className="invite-code"><small>INVITE CODE</small><strong>{crew.inviteCode}</strong></div><button className="primary" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/?join=${crew.inviteCode}`)}>Copy invite link</button></> : null}</section></div>}
+      {crewModal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCrewModal(null); }}><section className="crew-modal"><button className="modal-close" onClick={() => setCrewModal(null)}><Icon name="close"/></button><div className="modal-icon"><Icon name={signedIn ? "crew" : "settings"}/></div>{!signedIn ? authContent : crewModal === "create" ? <><span>START PLANNING TOGETHER</span><h1>Create a Crew</h1><p>Name your Crew now. You will get an invite code and QR code to share with friends.</p><label>Crew name<input autoFocus value={draftCrewName} onChange={(event) => setDraftCrewName(event.target.value)} placeholder="e.g. Nordic Flyers" onKeyDown={(event) => { if (event.key === "Enter") createCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || !draftCrewName.trim()} onClick={createCrew}>{saving ? "Creating…" : "Create Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("join"); }}>I have an invite code</button></> : crewModal === "join" ? <><span>JOIN YOUR FRIENDS</span><h1>Join a Crew</h1><p>Enter the six-character invite code shared by a Crew member.</p><label>Invite code<input autoFocus value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={6} placeholder="OSH26X" onKeyDown={(event) => { if (event.key === "Enter") joinCrew(); }}/></label>{crewError && <p className="form-error">{crewError}</p>}<button className="primary" disabled={saving || joinCode.trim().length < 4} onClick={joinCrew}>{saving ? "Joining…" : "Join Crew"}</button><button className="text-button" onClick={() => { setCrewError(""); setCrewModal("create"); }}>Create a new Crew instead</button></> : crew ? <><span>INVITE CREW MEMBERS</span><h1>{crew.name}</h1><p>Share this invite code or let a friend scan the QR code.</p>{qrCode && <Image unoptimized className="invite-qr" width={180} height={180} src={qrCode} alt={`QR code to join ${crew.name}`} />}<div className="invite-code"><small>INVITE CODE</small><strong>{crew.inviteCode}</strong></div><button className="primary" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/?join=${crew.inviteCode}`)}>Copy invite link</button><button className="text-button" onClick={() => { void signOut(); setCrewModal(null); }}>Logga ut</button></> : null}</section></div>}
 
       {pendingRemoval && <aside className="undo-toast" role="status"><span><strong>Removed from {pendingRemoval.kind === "event" ? "Crew Calendar" : "Crew Plan"}</strong><small>{pendingRemoval.title}</small></span><button onClick={undoRemoval}>Undo</button></aside>}
 
-      {!signedIn && <a className="signin-notice" href="/signin-with-chatgpt?return_to=%2F">Sign in to save and share your Crew →</a>}
+      {!signedIn && <button className="signin-notice" onClick={() => setCrewModal("auth")}>Logga in för att spara och dela Crew</button>}
     </main>
   );
 }

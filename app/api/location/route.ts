@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, lt, or } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { crewMembers, locationPreferences, locationRequests, locationSamples } from "../../../db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getSupabaseApiUser } from "../auth-user";
 
 type LocationMode = "off" | "request" | "tracking";
 type Basemap = "osm" | "ortho";
@@ -22,8 +22,8 @@ function validCoordinate(longitude: number, latitude: number, accuracy: number) 
     && Number.isFinite(accuracy) && accuracy >= 0 && accuracy <= 100_000;
 }
 
-export async function GET() {
-  const user = await getChatGPTUser();
+export async function GET(request: Request) {
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const db = await getDb();
   const [preference] = await db.select().from(locationPreferences).where(eq(locationPreferences.userEmail, user.email)).limit(1);
@@ -57,7 +57,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const payload = await request.json() as {
     action?: "settings" | "request" | "position";

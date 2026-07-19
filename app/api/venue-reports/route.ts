@@ -2,7 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { venueLocationReports, venuePlacements } from "../../../db/schema";
 import { isAdminEmail } from "../../admin";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getSupabaseApiUser } from "../auth-user";
 
 type Payload = {
   action?: "submit" | "approve" | "reject";
@@ -21,8 +21,8 @@ function validCoordinate(longitude: number, latitude: number) {
     && latitude >= 43.85 && latitude <= 44.1;
 }
 
-export async function GET() {
-  const user = await getChatGPTUser();
+export async function GET(request: Request) {
+  const user = await getSupabaseApiUser(request);
   if (!user || !isAdminEmail(user.email)) return Response.json({ error: "Admin access required" }, { status: 403 });
   const db = await getDb();
   const reports = await db.select().from(venueLocationReports)
@@ -32,7 +32,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
+  const user = await getSupabaseApiUser(request);
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
   const payload = await request.json() as Payload;
   const db = await getDb();

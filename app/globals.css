@@ -175,6 +175,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .request-status { margin:8px 2px 0; color:var(--muted); font-size:8px; }
 .settings-signin p { color:var(--muted); font-size:10px; }
 .settings-signin .primary { width:150px; text-decoration:none; }
+.form-note { margin:0; color:var(--muted); font-size:10px; font-weight:800; }
 .basemap-options { grid-template-columns:1fr 1fr; }
 .basemap-options button { align-content:start; }
 .map-preview { display:block; height:82px; margin:-5px -6px 6px; border-radius:8px; background-color:#d9dfd1; background-size:cover; }
@@ -296,7 +297,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .invite-code { display:grid; gap:4px; margin-bottom:14px; padding:12px; border:1px dashed #9fb6af; border-radius:11px; background:#edf5f1; text-align:center; }
 .invite-code small { color:var(--muted); font-size:8px; font-weight:900; letter-spacing:.15em; }
 .invite-code strong { color:var(--teal); font-size:25px; letter-spacing:.16em; }
-.signin-notice { position:fixed; z-index:60; right:18px; bottom:18px; padding:10px 13px; border-radius:10px; background:#123839; color:white; box-shadow:0 8px 25px rgba(0,0,0,.18); font-size:10px; font-weight:800; text-decoration:none; }
+.signin-notice { position:fixed; z-index:60; right:18px; bottom:18px; padding:10px 13px; border:0; border-radius:10px; background:#123839; color:white; box-shadow:0 8px 25px rgba(0,0,0,.18); font-size:10px; font-weight:800; text-decoration:none; }
 .undo-toast { position:fixed; z-index:120; left:50%; bottom:22px; display:flex; align-items:center; gap:24px; width:min(430px,calc(100% - 32px)); padding:12px 14px; transform:translateX(-50%); border-radius:13px; background:#102d2d; color:white; box-shadow:0 14px 38px rgba(4,28,27,.32); }
 .undo-toast span { min-width:0; flex:1; }
 .undo-toast strong,.undo-toast small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
