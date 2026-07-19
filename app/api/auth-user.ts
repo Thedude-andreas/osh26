@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "@/lib/supabase-config";
 
 export type ApiUser = {
   email: string;
@@ -13,11 +14,9 @@ function getBearerToken(request: Request) {
 
 export async function getSupabaseApiUser(request: Request): Promise<ApiUser | null> {
   const token = getBearerToken(request);
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabasePublishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (!token || !supabaseUrl || !supabasePublishableKey) return null;
+  if (!token || !SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) return null;
 
-  const supabase = createClient(supabaseUrl, supabasePublishableKey, {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,

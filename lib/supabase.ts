@@ -1,14 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabasePublishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./supabase-config";
 
 export function getSupabaseBrowserClient() {
-  if (!supabaseUrl || !supabasePublishableKey) {
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
     return null;
   }
 
-  return createClient(supabaseUrl, supabasePublishableKey, {
+  return createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,

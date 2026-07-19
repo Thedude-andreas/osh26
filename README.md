@@ -12,7 +12,7 @@ Aktuell app är mobil först, men ska fungera på desktop:
 - platsdelning
 - venue placement/reports för admin
 
-Primär UI-kod ligger i `app/osh26-app.tsx`. `app/page.tsx` hämtar ChatGPT-identitet via `app/chatgpt-auth.ts` och skickar den till appen.
+Primär UI-kod ligger i `app/osh26-app.tsx`. Supabase email/lösenord-auth hanteras i klienten och API:erna verifierar Supabase Bearer-token.
 
 ## Data
 
@@ -49,14 +49,11 @@ Lokalt krävs Node.js `>=22.13.0`.
 
 ## Auth
 
-Den sammanslagna mobilappen använder ChatGPT/Sites identity headers:
+Appen använder Supabase email/lösenord-auth för användaridentitet. Klienten skickar Supabase access token som Bearer-token till API:erna.
 
-- `oai-authenticated-user-email`
-- `oai-authenticated-user-full-name`
+Supabase public-konfig finns i `lib/supabase-config.ts`. Publishable key och projekt-URL är publika klientvärden; lägg aldrig Supabase secret/service-role key i frontend.
 
-Hjälpfunktionerna finns i `app/chatgpt-auth.ts`.
-
-Supabase-filerna i `supabase/` finns kvar från parallellspåret med email/password-auth och RLS. De är inte primär runtime för den aktuella mobilappen om inte vi uttryckligen byter tillbaka till Supabase-auth.
+Supabase-filerna i `supabase/` finns kvar från parallellspåret med RLS-tabeller. Aktuell app använder fortfarande D1 för crew-plan, kalender och platsdata.
 
 ## Databas
 
