@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import QRCode from "qrcode";
@@ -27,6 +27,7 @@ type Collection = { type: "FeatureCollection"; features: Feature[] };
 type Crew = { id: string; name: string; inviteCode: string; role: "owner" | "member" };
 type CrewMember = { userEmail: string; displayName: string };
 type PlanItem = { id: string; crewId: string; referenceId: string; kind: "exhibitor" | "event"; title: string; meta: string; startsAt: string | null; visited: boolean; visitedBy: string | null; visitedAt: string | null; addedBy: string; createdAt?: string };
+type CrewStatePayload = { crew: Crew | null; items: PlanItem[]; members?: CrewMember[] };
 type BoothLocation = { stallId: string; booth: string; center: [number, number]; bounds: [[number, number], [number, number]]; markerIndex: number };
 type ScheduleEvent = { id: string; title: string; category: string; interests: string[]; venue: string; start: string; end: string; localDate: string; localStart: string; localEnd: string; timezone: string; url: string };
 type SearchMatch = { kind: "exhibitor"; item: Exhibitor; score: number } | { kind: "event"; item: ScheduleEvent; score: number };
@@ -141,6 +142,8 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   const highlightExhibitorRef = useRef<(item: Exhibitor, focusBooth?: string) => void>(() => undefined);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRemovalRef = useRef<PlanItem | null>(null);
+  const crewSyncInFlightRef = useRef(false);
+  const localCrewWriteRef = useRef(false);
   const placementModeRef = useRef(false);
   const locationModeRef = useRef<LocationMode>("off");
   const lastAnsweredRequestRef = useRef("");
@@ -326,6 +329,34 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     return Array.from(latest.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [crewLocationSamples]);
 
+  const applyCrewState = useCallback((data: CrewStatePayload) => {
+    setCrew(data.crew);
+    setPlan(data.items);
+    setCrewMembers(data.members || []);
+  }, []);
+
+  const loadCrewState = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!signedIn || !authToken) return;
+    if (crewSyncInFlightRef.current || localCrewWriteRef.current || pendingRemovalRef.current) return;
+    crewSyncInFlightRef.current = true;
+    try {
+      const response = await fetch("/api/crew", { cache: "no-store", headers: authHeaders });
+      if (!response.ok) throw new Error("Could not load your Crew");
+      const data = await response.json() as CrewStatePayload;
+      applyCrewState(data);
+      if (!options.silent) setCrewError("");
+    } catch (error) {
+      if (!options.silent) setCrewError(error instanceof Error ? error.message : "Could not load your Crew");
+    } finally {
+      crewSyncInFlightRef.current = false;
+    }
+  }, [applyCrewState, authHeaders, authToken, signedIn]);
+
+  const finishLocalCrewWrite = useCallback(() => {
+    localCrewWriteRef.current = false;
+    window.setTimeout(() => { void loadCrewState({ silent: true }); }, 250);
+  }, [loadCrewState]);
+
   useEffect(() => {
     if (!supabase) return;
     let active = true;
@@ -344,11 +375,21 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
 
   useEffect(() => {
     if (!signedIn || !authToken) return;
-    fetch("/api/crew", { headers: authHeaders }).then(async (response) => {
-      if (!response.ok) throw new Error("Could not load your Crew");
-      return response.json() as Promise<{ crew: Crew | null; items: PlanItem[]; members?: CrewMember[] }>;
-    }).then((data) => { setCrew(data.crew); setPlan(data.items); setCrewMembers(data.members || []); }).catch((error) => setCrewError(error instanceof Error ? error.message : "Could not load your Crew"));
-  }, [authHeaders, authToken, signedIn]);
+    const initial = window.setTimeout(() => { void loadCrewState(); }, 0);
+    const timer = window.setInterval(() => { void loadCrewState({ silent: true }); }, 3_000);
+    const refresh = () => { void loadCrewState({ silent: true }); };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [authToken, loadCrewState, signedIn]);
 
   useEffect(() => {
     fetch("/data/events.json").then((response) => response.json()).then((data: { events: ScheduleEvent[] }) => setEvents(data.events)).catch(() => setEvents([]));
@@ -719,17 +760,19 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   function addToPlan(item: Exhibitor) {
     if (!crew) { setCrewModal("create"); return; }
     if (plannedIds.has(item.id)) return;
+    localCrewWriteRef.current = true;
     setSaving(true);
     fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "add", crewId: crew.id, kind: "exhibitor", referenceId: item.id, title: item.name, meta: `Booth ${item.booths.join(", ")}` }) })
       .then(async (response) => { if (!response.ok) throw new Error("Could not add this exhibitor"); return response.json() as Promise<{ item: PlanItem }>; })
       .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
       .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Plan"))
-      .finally(() => setSaving(false));
+      .finally(() => { setSaving(false); finishLocalCrewWrite(); });
   }
 
   function addEventToCalendar(item: ScheduleEvent) {
     if (!crew) { setCrewModal("create"); return; }
     if (plannedIds.has(item.id)) return;
+    localCrewWriteRef.current = true;
     setSaving(true);
     fetch("/api/crew/items", {
       method: "POST",
@@ -747,17 +790,20 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
       .then(async (response) => { if (!response.ok) throw new Error("Could not add this event"); return response.json() as Promise<{ item: PlanItem }>; })
       .then((data) => setPlan((current) => current.some((entry) => entry.id === data.item.id) ? current : [...current, data.item]))
       .catch((error) => setCrewError(error instanceof Error ? error.message : "Could not update the Crew Calendar"))
-      .finally(() => setSaving(false));
+      .finally(() => { setSaving(false); finishLocalCrewWrite(); });
   }
 
   async function persistRemoval(item: PlanItem) {
     if (!crew) return;
+    localCrewWriteRef.current = true;
     try {
       const response = await fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "remove", crewId: crew.id, itemId: item.id }) });
       if (!response.ok) throw new Error("Could not remove this item");
     } catch (error) {
       setPlan((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item]);
       setCrewError(error instanceof Error ? error.message : "Could not update your Crew");
+    } finally {
+      finishLocalCrewWrite();
     }
   }
 
@@ -790,6 +836,7 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     const name = draftCrewName.trim();
     if (!name) return;
     if (!signedIn) { setCrewModal("create"); return; }
+    localCrewWriteRef.current = true;
     setSaving(true); setCrewError("");
     try {
       const response = await fetch("/api/crew", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "create", name }) });
@@ -797,12 +844,13 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not create the Crew");
       setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal("manage"); setDraftCrewName("");
     } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not create the Crew"); }
-    finally { setSaving(false); }
+    finally { setSaving(false); finishLocalCrewWrite(); }
   }
 
   async function joinCrew() {
     if (joinCode.trim().length < 4) return;
     if (!signedIn) { setCrewModal("join"); return; }
+    localCrewWriteRef.current = true;
     setSaving(true); setCrewError("");
     try {
       const response = await fetch("/api/crew", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "join", code: joinCode }) });
@@ -810,12 +858,13 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
       if (!response.ok || !data.crew) throw new Error(data.error || "Could not join the Crew");
       setCrew(data.crew); setPlan(data.items || []); setCrewMembers(data.members || []); setCrewModal(null); setJoinCode("");
     } catch (error) { setCrewError(error instanceof Error ? error.message : "Could not join the Crew"); }
-    finally { setSaving(false); }
+    finally { setSaving(false); finishLocalCrewWrite(); }
   }
 
   async function toggleVisited(item: PlanItem) {
     if (!crew) return;
     const visited = !item.visited;
+    localCrewWriteRef.current = true;
     setPlan((current) => current.map((entry) => entry.id === item.id ? { ...entry, visited } : entry));
     try {
       const response = await fetch("/api/crew/items", { method: "POST", headers: authHeaders, body: JSON.stringify({ action: "toggleVisited", crewId: crew.id, itemId: item.id, visited }) });
@@ -825,6 +874,8 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     } catch (error) {
       setPlan((current) => current.map((entry) => entry.id === item.id ? item : entry));
       setCrewError(error instanceof Error ? error.message : "Could not update Visited status");
+    } finally {
+      finishLocalCrewWrite();
     }
   }
 
