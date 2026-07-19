@@ -291,6 +291,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .crew-modal label { display:grid; gap:7px; margin-bottom:14px; color:#526763; font-size:10px; font-weight:800; }
 .crew-modal input { height:44px; padding:0 12px; border:1px solid #cbd7d2; border-radius:11px; outline:0; background:white; color:var(--ink); font-size:14px; }
 .crew-modal input:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(22,124,120,.12); }
+.auth-form { display:grid; gap:0; }
 .crew-modal .text-button { width:100%; margin-top:5px; }
 .form-error { margin:-4px 0 12px!important; padding:8px 10px; border-radius:8px; background:#fff0ec; color:#9d3f2d!important; font-weight:800; }
 .invite-qr { display:block; width:180px; height:180px; margin:4px auto 16px; border:8px solid white; border-radius:14px; box-shadow:0 5px 20px rgba(15,45,45,.12); }

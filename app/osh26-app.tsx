@@ -36,7 +36,7 @@ type VenuePlacement = { venueName: string; longitude: number; latitude: number; 
 type VenueReport = { id: string; venueName: string; currentLongitude: number; currentLatitude: number; proposedLongitude: number; proposedLatitude: number; note: string; status: "pending" | "approved" | "rejected"; reportedBy: string; createdAt: string };
 type CrewLocationRequest = { id: string; crewId: string; requestedBy: string; requestedByName: string; createdAt: string };
 type CrewLocationSample = { id: string; crewId: string; userEmail: string; displayName: string; kind: "request" | "tracking"; requestId: string | null; longitude: number; latitude: number; accuracy: number; capturedAt: string };
-type AuthMode = "login" | "signup";
+type AuthMode = "login" | "signup" | "recovery";
 
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
@@ -180,6 +180,7 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authNewPassword, setAuthNewPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-07-20");
@@ -231,6 +232,34 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     });
     if (error) setAuthMessage(error.message);
     else setAuthMessage("Konto skapat. Bekräfta emailen och logga sedan in.");
+    setAuthLoading(false);
+  }
+
+  async function requestPasswordReset() {
+    if (!supabase || !authEmail.trim()) return;
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
+      redirectTo: window.location.origin,
+    });
+    if (error) setAuthMessage(error.message);
+    else setAuthMessage("Vi har skickat en återställningslänk till din email.");
+    setAuthLoading(false);
+  }
+
+  async function updatePassword() {
+    if (!supabase || !authNewPassword) return;
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.updateUser({ password: authNewPassword });
+    if (error) setAuthMessage(error.message);
+    else {
+      setAuthNewPassword("");
+      setAuthPassword("");
+      setAuthMode("login");
+      setCrewModal(null);
+      setAuthMessage("Lösenordet är uppdaterat.");
+    }
     setAuthLoading(false);
   }
 
@@ -363,9 +392,13 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     supabase.auth.getSession().then(({ data }) => {
       if (active) setSession(data.session);
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
-      if (nextSession && crewModal === "auth") setCrewModal(null);
+      if (event === "PASSWORD_RECOVERY") {
+        setAuthMode("recovery");
+        setCrewModal("auth");
+      }
+      if (nextSession && event !== "PASSWORD_RECOVERY" && crewModal === "auth") setCrewModal(null);
     });
     return () => {
       active = false;
@@ -1056,14 +1089,25 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   const authContent = (
     <>
       <span>CREW ACCOUNT</span>
-      <h1>{authMode === "login" ? "Logga in" : "Skapa konto"}</h1>
-      <p>Logga in med email och lösenord för att skapa crew, dela plats och spara crew-planen.</p>
+      <h1>{authMode === "signup" ? "Skapa konto" : authMode === "recovery" ? "Nytt lösenord" : "Logga in"}</h1>
+      <p>{authMode === "recovery" ? "Välj ett nytt lösenord för ditt Crew-konto." : "Logga in med email och lösenord för att skapa crew, dela plats och spara crew-planen."}</p>
       {!supabase ? <p className="form-error">Supabase saknas. Kontrollera NEXT_PUBLIC_SUPABASE_URL och NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</p> : <>
-        <label>Email<input autoFocus value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="namn@example.com" type="email" autoComplete="email" /></label>
-        <label>Lösenord<input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Lösenord" type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} onKeyDown={(event) => { if (event.key === "Enter") void (authMode === "login" ? signIn() : signUp()); }} /></label>
-        {authMessage && <p className={authMessage.includes("skap") || authMessage.includes("Bekr") ? "form-note" : "form-error"}>{authMessage}</p>}
-        <button className="primary" disabled={authLoading || !authEmail.trim() || !authPassword} onClick={() => { void (authMode === "login" ? signIn() : signUp()); }}>{authLoading ? "Vänta..." : authMode === "login" ? "Logga in" : "Skapa konto"}</button>
-        <button className="text-button" onClick={() => { setAuthMessage(""); setAuthMode(authMode === "login" ? "signup" : "login"); }}>{authMode === "login" ? "Skapa nytt konto" : "Jag har redan konto"}</button>
+        {authMode === "recovery" ? (
+          <form className="auth-form" onSubmit={(event) => { event.preventDefault(); void updatePassword(); }}>
+            <label htmlFor="osh26-new-password">Nytt lösenord<input id="osh26-new-password" name="new-password" autoFocus value={authNewPassword} onChange={(event) => setAuthNewPassword(event.target.value)} placeholder="Nytt lösenord" type="password" autoComplete="new-password" minLength={6} /></label>
+            {authMessage && <p className={authMessage.includes("uppdaterat") ? "form-note" : "form-error"}>{authMessage}</p>}
+            <button className="primary" type="submit" disabled={authLoading || authNewPassword.length < 6}>{authLoading ? "Vänta..." : "Spara lösenord"}</button>
+          </form>
+        ) : (
+          <form className="auth-form" onSubmit={(event) => { event.preventDefault(); void (authMode === "login" ? signIn() : signUp()); }}>
+            <label htmlFor="osh26-email">Email<input id="osh26-email" name="email" autoFocus value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="namn@example.com" type="email" autoComplete="username" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
+            <label htmlFor="osh26-password">Lösenord<input id="osh26-password" name={authMode === "login" ? "current-password" : "new-password"} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Lösenord" type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} minLength={6} /></label>
+            {authMessage && <p className={authMessage.includes("skap") || authMessage.includes("Bekr") || authMessage.includes("skickat") ? "form-note" : "form-error"}>{authMessage}</p>}
+            <button className="primary" type="submit" disabled={authLoading || !authEmail.trim() || authPassword.length < 6}>{authLoading ? "Vänta..." : authMode === "login" ? "Logga in" : "Skapa konto"}</button>
+            {authMode === "login" && <button className="text-button" type="button" disabled={authLoading || !authEmail.trim()} onClick={() => { void requestPasswordReset(); }}>Glömt lösenord?</button>}
+          </form>
+        )}
+        {authMode !== "recovery" && <button className="text-button" onClick={() => { setAuthMessage(""); setAuthPassword(""); setAuthMode(authMode === "login" ? "signup" : "login"); }}>{authMode === "login" ? "Skapa nytt konto" : "Jag har redan konto"}</button>}
       </>}
     </>
   );

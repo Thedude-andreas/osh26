@@ -11,6 +11,7 @@ export function getSupabaseBrowserClient() {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storageKey: "osh26-supabase-auth",
     },
   });
 }

@@ -200,16 +200,18 @@ export function CrewAuth() {
             {authMode === "login" ? "Ny" : "Login"}
           </button>
         </div>
-        <div className="crew-auth-fields">
-          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="namn@example.com" type="email" />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Lösenord" type="password" />
-        </div>
-        <div className="crew-auth-actions">
-          <button onClick={authMode === "login" ? signIn : signUp} disabled={status === "loading"}>
-            {authMode === "login" ? "Logga in" : "Skapa"}
-          </button>
-          {authMode === "login" && <button onClick={requestPasswordReset} disabled={status === "loading" || !email.trim()}>Reset</button>}
-        </div>
+        <form onSubmit={(event) => { event.preventDefault(); void (authMode === "login" ? signIn() : signUp()); }}>
+          <div className="crew-auth-fields">
+            <input id="crew-auth-email" name="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="namn@example.com" type="email" autoComplete="username" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+            <input id="crew-auth-password" name={authMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Lösenord" type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} minLength={6} />
+          </div>
+          <div className="crew-auth-actions">
+            <button type="submit" disabled={status === "loading" || !email.trim() || password.length < 6}>
+              {authMode === "login" ? "Logga in" : "Skapa"}
+            </button>
+            {authMode === "login" && <button type="button" onClick={requestPasswordReset} disabled={status === "loading" || !email.trim()}>Reset</button>}
+          </div>
+        </form>
         {message && <span>{message}</span>}
       </div>
     );
@@ -225,10 +227,10 @@ export function CrewAuth() {
       </div>
       <span>{session.user.email}</span>
       {passwordRecovery ? (
-        <div className="crew-auth-row">
-          <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Nytt lösenord" type="password" />
-          <button onClick={updatePassword} disabled={status === "loading"}>Spara</button>
-        </div>
+        <form className="crew-auth-row" onSubmit={(event) => { event.preventDefault(); void updatePassword(); }}>
+          <input id="crew-auth-new-password" name="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Nytt lösenord" type="password" autoComplete="new-password" minLength={6} />
+          <button type="submit" disabled={status === "loading" || newPassword.length < 6}>Spara</button>
+        </form>
       ) : activeCrew ? (
         <span>{memberships.length} crew-medlemskap aktivt</span>
       ) : (
