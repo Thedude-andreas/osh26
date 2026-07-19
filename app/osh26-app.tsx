@@ -39,8 +39,8 @@ type CrewLocationSample = { id: string; crewId: string; userEmail: string; displ
 type AuthMode = "login" | "signup" | "recovery";
 
 const SHUTTLE_LEGEND = [
-  ["Blue", "#0076a8"], ["Purple", "#5f3d8c"], ["Red", "#d01d2f"], ["Yellow", "#f7c62b"], ["Express", "#7ebd39"],
-  ["Campground", "#4d9b5d"], ["Museum", "#333333"], ["North 40", "#f36f21"], ["South 40", "#0089c4"], ["Seaplane", "#05a6c8"],
+  ["Blue", "#0076a8"], ["Red", "#d01d2f"], ["Yellow", "#f7c62b"], ["Express", "#7ebd39"],
+  ["Campground", "#4d9b5d"], ["Museum", "#4b3f38"], ["KidVenture", "#c31e2f"], ["Purple Lot", "#6d3f8d"],
 ];
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
