@@ -1121,7 +1121,7 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
         <div className="logo">26</div>
         <nav>{(["map", "plan", "calendar"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon name={item} /><span>{item === "plan" ? "Crew Plan" : item[0].toUpperCase() + item.slice(1)}</span>{item === "plan" && crewPlan.length > 0 && <b>{crewPlan.length}</b>}{item === "calendar" && crewCalendarItems.length > 0 && <b>{crewCalendarItems.length}</b>}</button>)}</nav>
         <button className={`rail-settings ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}><Icon name="settings"/><span>Settings</span></button>
-        <button className="avatar" title={userName}>{initials || "GP"}</button>
+        <button className="avatar" title="Account settings" aria-label="Account settings" onClick={() => setView("settings")}>{initials || "GP"}</button>
       </aside>
 
       <section className="workspace">
@@ -1191,6 +1191,24 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
         <div className={`view content-view settings-view ${view === "settings" ? "visible" : ""}`}>
           <div className="content-header"><div><span>YOUR PREFERENCES</span><h1>Settings</h1><p>Control location sharing and choose the map background on this device.</p></div></div>
           <div className="settings-grid">
+            <section className="settings-card account-card">
+              <div className="settings-card-head"><span><Icon name="crew"/></span><div><small>ACCOUNT</small><h2>Crew account</h2></div></div>
+              {!signedIn ? <div className="settings-signin"><p>Logga in för att skapa crew, dela plats och spara crew-planen.</p><button className="primary" onClick={() => setCrewModal("auth")}>Logga in</button></div> : <>
+                <div className="account-summary">
+                  <div className="account-avatar">{initials || "GP"}</div>
+                  <div><strong>{userName}</strong><small>{userEmail}</small></div>
+                </div>
+                <div className="account-meta">
+                  <span><small>CREW</small><strong>{crew?.name || "Ingen crew"}</strong></span>
+                  <span><small>ROLE</small><strong>{crew?.role === "owner" ? "Owner" : crew ? "Member" : "Not joined"}</strong></span>
+                </div>
+                <div className="account-actions">
+                  <button onClick={() => setCrewModal(crew ? "manage" : "create")}>{crew ? "Hantera crew" : "Skapa eller gå med"}</button>
+                  <button className="logout-button" onClick={() => { void signOut(); }}>Logga ut</button>
+                </div>
+              </>}
+            </section>
+
             <section className="settings-card">
               <div className="settings-card-head"><span><Icon name="location"/></span><div><small>PRIVACY</small><h2>Location sharing</h2></div></div>
               {!signedIn ? <div className="settings-signin"><p>Logga in för att dela din position med en Crew.</p><button className="primary" onClick={() => setCrewModal("auth")}>Logga in</button></div> : <>

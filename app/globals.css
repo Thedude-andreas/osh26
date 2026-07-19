@@ -151,6 +151,7 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .settings-view { padding-bottom:90px; }
 .settings-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:16px; max-width:950px; margin:0 auto; }
 .settings-card { padding:20px; border:1px solid var(--line); border-radius:18px; background:rgba(255,253,248,.92); box-shadow:0 9px 28px rgba(24,54,51,.08); }
+.account-card { grid-column:1 / -1; }
 .settings-card-head { display:flex; align-items:center; gap:11px; margin-bottom:16px; }
 .settings-card-head > span { display:grid; place-items:center; width:39px; height:39px; border-radius:11px; background:#dcece7; color:var(--teal); }
 .settings-card-head svg { width:20px; }
@@ -175,6 +176,18 @@ svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8;
 .request-status { margin:8px 2px 0; color:var(--muted); font-size:8px; }
 .settings-signin p { color:var(--muted); font-size:10px; }
 .settings-signin .primary { width:150px; text-decoration:none; }
+.account-summary { display:flex; align-items:center; gap:12px; padding:12px; border:1px solid #d7e2dc; border-radius:13px; background:white; }
+.account-avatar { display:grid; place-items:center; flex:0 0 auto; width:42px; height:42px; border-radius:50%; background:#235252; color:white; font-size:12px; font-weight:900; }
+.account-summary strong,.account-summary small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-summary strong { font-size:13px; }
+.account-summary small { margin-top:3px; color:var(--muted); font-size:10px; }
+.account-meta { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+.account-meta span { display:grid; gap:3px; padding:10px 11px; border-radius:11px; background:#eef4f0; }
+.account-meta small { color:#9a6c1e; font-size:7px; font-weight:900; letter-spacing:.14em; }
+.account-meta strong { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.account-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.account-actions button { min-height:38px; padding:0 13px; border:1px solid #c9dcd5; border-radius:10px; background:white; color:var(--teal); cursor:pointer; font-size:10px; font-weight:900; }
+.account-actions .logout-button { border-color:#e0b5ad; background:#fff0ec; color:#a13b2b; }
 .form-note { margin:0; color:var(--muted); font-size:10px; font-weight:800; }
 .basemap-options { grid-template-columns:1fr 1fr; }
 .basemap-options button { align-content:start; }
