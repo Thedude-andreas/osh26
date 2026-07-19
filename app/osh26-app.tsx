@@ -20,7 +20,7 @@ type Exhibitor = {
 };
 type Feature = {
   id: string;
-  geometry: { type: "Point" | "Polygon"; coordinates: unknown };
+  geometry: { type: "Point" | "Polygon" | "LineString"; coordinates: unknown };
   properties: Record<string, unknown>;
 };
 type Collection = { type: "FeatureCollection"; features: Feature[] };
@@ -38,6 +38,10 @@ type CrewLocationRequest = { id: string; crewId: string; requestedBy: string; re
 type CrewLocationSample = { id: string; crewId: string; userEmail: string; displayName: string; kind: "request" | "tracking"; requestId: string | null; longitude: number; latitude: number; accuracy: number; capturedAt: string };
 type AuthMode = "login" | "signup" | "recovery";
 
+const SHUTTLE_LEGEND = [
+  ["Blue", "#0076a8"], ["Purple", "#5f3d8c"], ["Red", "#d01d2f"], ["Yellow", "#f7c62b"], ["Express", "#7ebd39"],
+  ["Campground", "#4d9b5d"], ["Museum", "#333333"], ["North 40", "#f36f21"], ["South 40", "#0089c4"], ["Seaplane", "#05a6c8"],
+];
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
   { value: "2026-07-18", day: "SAT", date: "18" }, { value: "2026-07-19", day: "SUN", date: "19" },
@@ -110,6 +114,22 @@ function stringArray(value: unknown): string[] {
   if (typeof value !== "string") return [];
   try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed.map(String) : [value]; }
   catch { return [value]; }
+}
+
+function popupContent(title: string, body: string, note?: string) {
+  const root = document.createElement("div");
+  root.className = "map-popup-content";
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const text = document.createElement("span");
+  text.textContent = body;
+  root.append(heading, text);
+  if (note) {
+    const small = document.createElement("small");
+    small.textContent = note;
+    root.append(small);
+  }
+  return root;
 }
 
 function Icon({ name }: { name: "map" | "plan" | "calendar" | "search" | "crew" | "location" | "close" | "check" | "repeat" | "trash" | "settings" }) {
@@ -514,13 +534,41 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     map.on("load", async () => {
-      const [stallResponse, labelResponse, exhibitorResponse] = await Promise.all([
-        fetch("/data/stalls.geojson"), fetch("/data/booth-labels.geojson"), fetch("/data/exhibitors.json"),
+      const [stallResponse, labelResponse, exhibitorResponse, shuttleResponse] = await Promise.all([
+        fetch("/data/stalls.geojson"), fetch("/data/booth-labels.geojson"), fetch("/data/exhibitors.json"), fetch("/data/shuttles.geojson"),
       ]);
       const stalls = await stallResponse.json() as Collection;
       const labelData = await labelResponse.json() as Collection;
       const exhibitorData = await exhibitorResponse.json() as { exhibitors: Exhibitor[] };
+      const shuttleData = await shuttleResponse.json() as Collection;
       setExhibitors(exhibitorData.exhibitors);
+      map.addSource("shuttles", { type: "geojson", data: shuttleData as never });
+      map.addLayer({
+        id: "shuttle-route-casing", type: "line", source: "shuttles", filter: ["==", ["get", "kind"], "route"], layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": "#ffffff", "line-opacity": 0.78, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 4, 17, 7, 20, 10] },
+      });
+      map.addLayer({
+        id: "shuttle-route-solid", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "solid"]], layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-opacity": 0.92, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.2, 17, 4, 20, 6] },
+      });
+      map.addLayer({
+        id: "shuttle-route-dashed", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dashed"]], layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-opacity": 0.9, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.1, 17, 3.8, 20, 5.5], "line-dasharray": [1.8, 1.2] },
+      });
+      map.addLayer({
+        id: "shuttle-route-dotted", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dotted"]], layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": ["get", "color"], "line-opacity": 0.9, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.1, 17, 3.8, 20, 5.5], "line-dasharray": [0.2, 1.4] },
+      });
+      map.addLayer({
+        id: "shuttle-stops", type: "circle", source: "shuttles", filter: ["==", ["get", "kind"], "stop"],
+        paint: {
+          "circle-color": ["get", "color"],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 13, 4, 17, 6, 20, 8],
+          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 13, 0.55, 15, 0.9],
+        },
+      });
       map.addSource("stalls", { type: "geojson", data: stalls as never });
       map.addLayer({
         id: "stall-fill", type: "fill", source: "stalls",
@@ -625,6 +673,28 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
       });
       map.on("mouseenter", "stall-fill", () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "stall-fill", () => { map.getCanvas().style.cursor = ""; });
+      map.on("click", "shuttle-stops", (event) => {
+        const feature = event.features?.[0];
+        if (!feature) return;
+        new maplibregl.Popup({ closeButton: false, closeOnClick: true, offset: 12 })
+          .setLngLat(event.lngLat)
+          .setDOMContent(popupContent(String(feature.properties?.name || "Shuttle stop"), String(feature.properties?.routes || "Shuttle stop"), "Official Visitors Map 2026 · approximate"))
+          .addTo(map);
+      });
+      ["shuttle-route-solid", "shuttle-route-dashed", "shuttle-route-dotted"].forEach((layer) => {
+        map.on("click", layer, (event) => {
+          const feature = event.features?.[0];
+          if (!feature) return;
+          new maplibregl.Popup({ closeButton: false, closeOnClick: true, offset: 8 })
+            .setLngLat(event.lngLat)
+            .setDOMContent(popupContent(String(feature.properties?.name || "Shuttle route"), "Shuttle route", "Official Visitors Map 2026 · approximate"))
+            .addTo(map);
+        });
+      });
+      ["shuttle-stops", "shuttle-route-solid", "shuttle-route-dashed", "shuttle-route-dotted"].forEach((layer) => {
+        map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+      });
       map.on("click", (event) => {
         if (!placementModeRef.current || !selectedVenueRef.current) return;
         setPlacementDraft([event.lngLat.lng, event.lngLat.lat]);
@@ -1142,6 +1212,7 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
           {!mapReady && <div className="map-loading"><span/><strong>Preparing the AirVenture map…</strong></div>}
           <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors, event venues and build a shared plan.</p></div>
           {isAdmin && !placementMode && !reviewMode && <button className="venue-editor-toggle" onClick={startReportReview}>Review location reports <b>{venueReports.length}</b></button>}
+          {!placementMode && !reviewMode && <aside className="shuttle-legend"><strong>Shuttles</strong><div>{SHUTTLE_LEGEND.map(([name, color]) => <span key={name}><i style={{ background: color }} />{name}</span>)}</div><small>Official visitor map · approximate</small></aside>}
           {crew && !placementMode && !reviewMode && <button className="crew-location-request" disabled={locationSaving} onClick={requestCrewLocations}><Icon name="crew"/> Locate Crew</button>}
           {!placementMode && !reviewMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
           {venueNotice && !placementMode && <aside className="venue-report-toast" role="status">{venueNotice}<button onClick={() => setVenueNotice("")} aria-label="Dismiss"><Icon name="close"/></button></aside>}
