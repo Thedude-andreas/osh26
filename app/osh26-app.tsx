@@ -38,10 +38,14 @@ type CrewLocationRequest = { id: string; crewId: string; requestedBy: string; re
 type CrewLocationSample = { id: string; crewId: string; userEmail: string; displayName: string; kind: "request" | "tracking"; requestId: string | null; longitude: number; latitude: number; accuracy: number; capturedAt: string };
 type AuthMode = "login" | "signup" | "recovery";
 
-const SHUTTLE_LEGEND = [
-  ["Blue", "#0076a8"], ["Red", "#d01d2f"], ["Yellow", "#f7c62b"], ["Express", "#7ebd39"],
-  ["Campground", "#4d9b5d"], ["Museum", "#4b3f38"], ["KidVenture", "#c31e2f"], ["Purple Lot", "#6d3f8d"],
-];
+const SHUTTLE_LAYER_IDS = [
+  "shuttle-route-casing",
+  "shuttle-route-solid",
+  "shuttle-route-dashed",
+  "shuttle-route-dotted",
+  "shuttle-stops",
+] as const;
+const SHUTTLE_VISIBILITY_STORAGE_KEY = "osh26-shuttle-layer";
 const CENTER: [number, number] = [-88.56345, 43.97742];
 const CALENDAR_DATES = [
   { value: "2026-07-18", day: "SAT", date: "18" }, { value: "2026-07-19", day: "SUN", date: "19" },
@@ -188,6 +192,7 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   const [venueError, setVenueError] = useState("");
   const [locationMode, setLocationMode] = useState<LocationMode>("off");
   const [basemap, setBasemap] = useState<Basemap>("osm");
+  const [showShuttles, setShowShuttles] = useState(false);
   const [crewLocationSamples, setCrewLocationSamples] = useState<CrewLocationSample[]>([]);
   const [crewLocationRequest, setCrewLocationRequest] = useState<CrewLocationRequest | null>(null);
   const [locationSaving, setLocationSaving] = useState(false);
@@ -472,6 +477,12 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
   }, []);
 
   useEffect(() => {
+    if (window.localStorage.getItem(SHUTTLE_VISIBILITY_STORAGE_KEY) === "visible") {
+      queueMicrotask(() => setShowShuttles(true));
+    }
+  }, []);
+
+  useEffect(() => {
     if (!signedIn) return;
     void loadLocationState();
     const timer = window.setInterval(() => { void loadLocationState(); }, 10_000);
@@ -544,23 +555,23 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
       setExhibitors(exhibitorData.exhibitors);
       map.addSource("shuttles", { type: "geojson", data: shuttleData as never });
       map.addLayer({
-        id: "shuttle-route-casing", type: "line", source: "shuttles", filter: ["==", ["get", "kind"], "route"], layout: { "line-join": "round", "line-cap": "round" },
+        id: "shuttle-route-casing", type: "line", source: "shuttles", filter: ["==", ["get", "kind"], "route"], layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
         paint: { "line-color": "#ffffff", "line-opacity": 0.78, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 4, 17, 7, 20, 10] },
       });
       map.addLayer({
-        id: "shuttle-route-solid", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "solid"]], layout: { "line-join": "round", "line-cap": "round" },
+        id: "shuttle-route-solid", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "solid"]], layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
         paint: { "line-color": ["get", "color"], "line-opacity": 0.92, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.2, 17, 4, 20, 6] },
       });
       map.addLayer({
-        id: "shuttle-route-dashed", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dashed"]], layout: { "line-join": "round", "line-cap": "round" },
+        id: "shuttle-route-dashed", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dashed"]], layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
         paint: { "line-color": ["get", "color"], "line-opacity": 0.9, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.1, 17, 3.8, 20, 5.5], "line-dasharray": [1.8, 1.2] },
       });
       map.addLayer({
-        id: "shuttle-route-dotted", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dotted"]], layout: { "line-join": "round", "line-cap": "round" },
+        id: "shuttle-route-dotted", type: "line", source: "shuttles", filter: ["all", ["==", ["get", "kind"], "route"], ["==", ["get", "dash"], "dotted"]], layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
         paint: { "line-color": ["get", "color"], "line-opacity": 0.9, "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.1, 17, 3.8, 20, 5.5], "line-dasharray": [0.2, 1.4] },
       });
       map.addLayer({
-        id: "shuttle-stops", type: "circle", source: "shuttles", filter: ["==", ["get", "kind"], "stop"],
+        id: "shuttle-stops", type: "circle", source: "shuttles", filter: ["==", ["get", "kind"], "stop"], layout: { visibility: "none" },
         paint: {
           "circle-color": ["get", "color"],
           "circle-stroke-color": "#ffffff",
@@ -711,6 +722,21 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
     map.setLayoutProperty("base-osm", "visibility", basemap === "osm" ? "visible" : "none");
     map.setLayoutProperty("base-ortho", "visibility", basemap === "ortho" ? "visible" : "none");
   }, [basemap, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    const visibility = showShuttles ? "visible" : "none";
+    SHUTTLE_LAYER_IDS.forEach((layerId) => {
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", visibility);
+    });
+  }, [mapReady, showShuttles]);
+
+  function toggleShuttles() {
+    const next = !showShuttles;
+    setShowShuttles(next);
+    window.localStorage.setItem(SHUTTLE_VISIBILITY_STORAGE_KEY, next ? "visible" : "hidden");
+  }
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1212,7 +1238,6 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
           {!mapReady && <div className="map-loading"><span/><strong>Preparing the AirVenture map…</strong></div>}
           <div className="map-title"><small>AIRVENTURE 2026</small><h1>Explore the grounds</h1><p>Find exhibitors, event venues and build a shared plan.</p></div>
           {isAdmin && !placementMode && !reviewMode && <button className="venue-editor-toggle" onClick={startReportReview}>Review location reports <b>{venueReports.length}</b></button>}
-          {!placementMode && !reviewMode && <aside className="shuttle-legend"><strong>Shuttles</strong><div>{SHUTTLE_LEGEND.map(([name, color]) => <span key={name}><i style={{ background: color }} />{name}</span>)}</div><small>Official visitor map · approximate</small></aside>}
           {crew && !placementMode && !reviewMode && <button className="crew-location-request" disabled={locationSaving} onClick={requestCrewLocations}><Icon name="crew"/> Locate Crew</button>}
           {!placementMode && !reviewMode && <button className="locate" onClick={locate} aria-label="Show my location"><Icon name="location"/></button>}
           {venueNotice && !placementMode && <aside className="venue-report-toast" role="status">{venueNotice}<button onClick={() => setVenueNotice("")} aria-label="Dismiss"><Icon name="close"/></button></aside>}
@@ -1299,10 +1324,16 @@ export default function Osh26App({ userName: initialUserName, signedIn: initialS
             </section>
 
             <section className="settings-card">
-              <div className="settings-card-head"><span><Icon name="map"/></span><div><small>MAP</small><h2>Basemap</h2></div></div>
+              <div className="settings-card-head"><span><Icon name="map"/></span><div><small>MAP</small><h2>Map</h2></div></div>
+              <div className="settings-section-label">Basemap</div>
               <div className="setting-options basemap-options">
                 <button className={basemap === "osm" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings(locationMode, "osm")}><span className="map-preview osm-preview"/><strong>OpenStreetMap</strong><small>Clear streets, buildings and place names.</small></button>
                 <button className={basemap === "ortho" ? "active" : ""} disabled={locationSaving} onClick={() => saveLocationSettings(locationMode, "ortho")}><span className="map-preview ortho-preview"/><strong>Ortho</strong><small>Aerial imagery beneath the event map layers.</small></button>
+              </div>
+              <div className="settings-section-label layer-section-label">Layers</div>
+              <div className="layer-setting">
+                <span><strong>Shuttle routes <em>(Beta)</em></strong><small>Preliminary routes and stops from the official visitor map.</small></span>
+                <button className="setting-switch" type="button" role="switch" aria-checked={showShuttles} aria-label="Show shuttle routes (Beta)" onClick={toggleShuttles}><i /></button>
               </div>
               <button className="text-button view-map-setting" onClick={() => setView("map")}>View map</button>
             </section>
